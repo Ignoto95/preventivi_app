@@ -13,10 +13,13 @@ dependencies:
   # Pacchetti per Firebase
   firebase_core: any
   firebase_auth: any
+  pdf: ^3.11.1
+  path_provider: ^2.0.14
 
   # Per le richieste HTTP al server
   #http: ^0.15.0
   http: any
+  syncfusion_flutter_datagrid: ^27.2.4
 
 
 dev_dependencies:

@@ -9,12 +9,19 @@ import 'search_preventivo_page.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+    try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
   // Inizializza Firebase con le opzioni generate
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform, // Usa le opzioni di configurazione corrette
-  );
+  //await Firebase.initializeApp(
+  //  options: DefaultFirebaseOptions.currentPlatform, // Usa le opzioni di configurazione corrette
+  //);
 
   runApp(MyApp());
+  } catch (e) {
+    print("Errore nell'inizializzazione di Firebase: $e");
+  }
 }
 
 class MyApp extends StatelessWidget {

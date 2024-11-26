@@ -11,6 +11,7 @@ class LoginPage extends StatelessWidget {
       final password = passwordController.text.trim();
 
       // Login con Firebase
+      // ignore: unused_local_variable
       UserCredential userCredential = await FirebaseAuth.instance
           .signInWithEmailAndPassword(email: email, password: password);
 
