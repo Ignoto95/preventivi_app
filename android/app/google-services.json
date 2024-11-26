@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "755559667588",
+    "project_id": "sconga-app-251124",
+    "storage_bucket": "sconga-app-251124.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:755559667588:android:201e016bc218608bc96fd1",
+        "android_client_info": {
+          "package_name": "com.android.application"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC8O-totE8VCaLioyz38_l_8-qP8VyvWcI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

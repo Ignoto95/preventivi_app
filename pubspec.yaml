@@ -1,0 +1,28 @@
+name: preventivi_app
+description: "A new Flutter project."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.5.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Pacchetti per Firebase
+  firebase_core: any
+  firebase_auth: any
+
+  # Per le richieste HTTP al server
+  #http: ^0.15.0
+  http: any
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
