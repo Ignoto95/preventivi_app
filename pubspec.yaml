@@ -13,6 +13,7 @@ dependencies:
   # Pacchetti per Firebase
   firebase_core: any
   firebase_auth: any
+  intl: ^0.18.0
   pdf: ^3.11.1
   path_provider: ^2.0.14
 

@@ -17,9 +17,9 @@ class _SearchPreventivoPageState extends State<SearchPreventivoPage> {
 
     try {
       // Effettua la ricerca tramite il servizio
-      final results = await preventivoService.searchPreventivo(query);
+      //final results = await preventivoService.searchPreventivo(query);
       setState(() {
-        searchResults = results;
+        //searchResults = results;
       });
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
