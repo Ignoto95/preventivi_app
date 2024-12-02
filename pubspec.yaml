@@ -16,6 +16,7 @@ dependencies:
   intl: ^0.18.0
   pdf: ^3.11.1
   path_provider: ^2.0.14
+  printing: ^5.10.0
 
   # Per le richieste HTTP al server
   #http: ^0.15.0

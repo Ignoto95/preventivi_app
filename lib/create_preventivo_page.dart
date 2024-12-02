@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'services/preventivo_service.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 class CreatePreventivoPage extends StatefulWidget {
   @override
@@ -13,7 +14,6 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
   final TextEditingController viaController = TextEditingController();
   final TextEditingController dataPreventivoController = TextEditingController();
   final List<Map<String, dynamic>> lavori = [];
-  final PreventivoService preventivoService = PreventivoService();
 
   // Funzione per salvare il preventivo
   Future<void> savePreventivo() async {
@@ -23,6 +23,7 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
     final via = viaController.text.trim();
     final dataPreventivo = dataPreventivoController.text.trim();
 
+    // Verifica che tutti i campi obbligatori siano compilati
     if (nome.isEmpty || cognome.isEmpty || citta.isEmpty || via.isEmpty || lavori.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Compila tutti i campi e aggiungi almeno un lavoro.')),
@@ -30,20 +31,36 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
       return;
     }
 
+    // Creazione del payload per l'API
     final preventivoData = {
+      'cliente': {
+        'nome': nome,
+        'cognome': cognome,
+        'citta': citta,
+        'via': via,
+      },
       'data_preventivo': dataPreventivo,
-      'id_cliente': 0,
-      'prezzo_totale': lavori.fold<double>(0.0, (sum, lavoro) => sum + lavoro['prezzo']),
       'lavori': lavori,
-      'cliente': {'nome': nome, 'cognome': cognome, 'citta': citta, 'via': via}
     };
 
     try {
-      await preventivoService.savePreventivo(preventivoData);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Preventivo salvato con successo!')),
+      // Chiamata HTTP per salvare il preventivo
+      final response = await http.post(
+        Uri.parse('http://94.176.182.61:3000/preventivo'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(preventivoData),
       );
-      Navigator.pop(context);
+
+      if (response.statusCode == 200 || response.statusCode == 201 ) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Preventivo salvato con successo!')),
+        );
+        Navigator.pop(context, true); // Torna alla Home con valore true
+      } else {
+        print('Errore: ${response.statusCode}');
+        print('Corpo risposta: ${response.body}');
+        throw Exception('Errore nel salvataggio del preventivo: ${response.body}');
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Errore: ${e.toString()}')),
@@ -55,15 +72,14 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
   Future<void> _selectDate(BuildContext context) async {
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: dataPreventivoController.text.isEmpty
-          ? DateTime.now()
-          : DateTime.parse(dataPreventivoController.text),
+      initialDate: DateTime.now(),
       firstDate: DateTime(2000),
       lastDate: DateTime(2101),
     );
-    if (picked != null && picked != DateTime.now()) {
+
+    if (picked != null) {
       setState(() {
-        dataPreventivoController.text = picked.toLocal().toString().split(' ')[0];  // Formato YYYY-MM-DD
+        dataPreventivoController.text = picked.toIso8601String().split('T').first; // Formato: YYYY-MM-DD
       });
     }
   }
@@ -90,7 +106,7 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
               TextField(
                 controller: prezzoController,
                 decoration: InputDecoration(labelText: 'Prezzo (€)'),
-                keyboardType: TextInputType.number,
+                keyboardType: TextInputType.numberWithOptions(decimal: true),
               ),
             ],
           ),
@@ -147,7 +163,7 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
                 controller: dataPreventivoController,
                 decoration: InputDecoration(labelText: 'Data Preventivo'),
                 readOnly: true,
-                onTap: () => _selectDate(context), // Mostra il DatePicker
+                onTap: () => _selectDate(context),
               ),
               SizedBox(height: 16),
               Text(
@@ -163,7 +179,7 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
                   return Card(
                     margin: EdgeInsets.symmetric(vertical: 8),
                     child: ListTile(
-                      title: Text('${lavoro['tipo_lavoro']} - €${lavoro['prezzo']}'),
+                      title: Text('${lavoro['tipo_lavoro']} - €${lavoro['prezzo'].toStringAsFixed(2)}'),
                       subtitle: Text('Descrizione: ${lavoro['descrizione_lavoro']}'),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
