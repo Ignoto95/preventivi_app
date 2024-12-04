@@ -13,21 +13,29 @@ dependencies:
   # Pacchetti per Firebase
   firebase_core: any
   firebase_auth: any
-  intl: ^0.18.0
+  intl: ^0.20.1
   pdf: ^3.11.1
   path_provider: ^2.0.14
   printing: ^5.10.0
+  js: ^0.6.3
 
   # Per le richieste HTTP al server
-  #http: ^0.15.0
   http: any
-  syncfusion_flutter_datagrid: ^27.2.4
 
+  # Syncfusion libraries aggiornate e compatibili
+  syncfusion_flutter_pdf: ^24.1.46
+  syncfusion_flutter_datagrid: ^24.2.9
+  universal_io: ^2.0.5
+  universal_html: ^2.0.8
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^4.0.0
+  flutter_lints: ^5.0.0
 
 flutter:
   uses-material-design: true
+
+  # Dichiarazione degli asset
+  assets:
+    - assests\modello_preventivo_template.pdf

@@ -246,12 +246,14 @@ class _HomePageState extends State<HomePage> {
                                             );
                                           },
                                         ),
-                                        IconButton(
-                                          icon: Icon(Icons.picture_as_pdf, color: Colors.green),
-                                          onPressed: () {
-                                            PDFService.generateAndDownloadPDF(preventivo);
-                                          },
-                                        ),
+IconButton(
+  icon: Icon(Icons.picture_as_pdf, color: Colors.green),
+  onPressed: () async {
+    //int preventivoId = preventivo["id_preventivo"]; // Estrai l'ID del preventivo
+    //await PDFService.generateAndDownloadPDF(preventivoId); // Passa l'ID corretto
+    downloadPdf('http://94.176.182.61:3000/generate-pdf/33');
+  },
+),
                                       ],
                                     )
                                   ],

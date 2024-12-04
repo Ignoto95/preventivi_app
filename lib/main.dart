@@ -5,20 +5,20 @@ import 'login_page.dart';
 import 'home_page.dart';
 import 'create_preventivo_page.dart';
 import 'search_preventivo_page.dart';
+import 'package:path_provider/path_provider.dart';
+// import 'dart:io'; --> libreria non supportata lato web flutter
+import 'package:flutter/foundation.dart'; // Import per kIsWeb
+import 'dart:io';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-    try {
+  try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
-  // Inizializza Firebase con le opzioni generate
-  //await Firebase.initializeApp(
-  //  options: DefaultFirebaseOptions.currentPlatform, // Usa le opzioni di configurazione corrette
-  //);
 
-  runApp(MyApp());
+    runApp(MyApp());
   } catch (e) {
     print("Errore nell'inizializzazione di Firebase: $e");
   }
@@ -37,5 +37,16 @@ class MyApp extends StatelessWidget {
         '/search': (context) => SearchPreventivoPage(),
       },
     );
+  }
+
+  Future<String> getTemporaryPath() async {
+    if (kIsWeb) {
+      // Per Web usa direttamente una stringa come percorso fittizio
+      return '/web_temp/';
+    } else {
+      // Usa path_provider per le piattaforme mobili e desktop
+      final directory = await getTemporaryDirectory();
+      return directory.path;
+    }
   }
 }
