@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:preventivi_app/services/pdf_service.dart';
 import 'create_preventivo_page.dart';
-import 'ModificaPreventivoPage.dart';
+import 'modifica_preventivo_page.dart';
 
 class HomePage extends StatefulWidget {
   @override
@@ -107,7 +107,7 @@ class _HomePageState extends State<HomePage> {
             SizedBox(height: 10),
             TextField(
               decoration: InputDecoration(
-                labelText: 'Cerca',
+                labelText: 'Cerca per Cliente',
                 prefixIcon: Icon(Icons.search),
                 border: OutlineInputBorder(),
               ),
