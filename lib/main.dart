@@ -8,7 +8,7 @@ import 'search_preventivo_page.dart';
 import 'package:path_provider/path_provider.dart';
 // import 'dart:io'; --> libreria non supportata lato web flutter
 import 'package:flutter/foundation.dart'; // Import per kIsWeb
-import 'dart:io';
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

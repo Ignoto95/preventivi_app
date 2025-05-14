@@ -13,6 +13,10 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
   final TextEditingController cittaController = TextEditingController();
   final TextEditingController viaController = TextEditingController();
   final TextEditingController dataPreventivoController = TextEditingController();
+  final TextEditingController emailController = TextEditingController();
+  final TextEditingController telefonoController = TextEditingController();
+  final TextEditingController codiceFiscaleController = TextEditingController();
+  final TextEditingController accontoController = TextEditingController();
   final List<Map<String, dynamic>> lavori = [];
 
   // Funzione per salvare il preventivo
@@ -22,11 +26,39 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
     final citta = cittaController.text.trim();
     final via = viaController.text.trim();
     final dataPreventivo = dataPreventivoController.text.trim();
+    final email = emailController.text.trim();
+    final telefono = telefonoController.text.trim();
+    final codiceFiscale = codiceFiscaleController.text.trim();
+    final accontoText = accontoController.text.trim();
+    final acconto = double.tryParse(accontoText) ?? 0;
 
+    //Validazione dell'acconto
+    if (acconto < 0 || acconto > 100) {
+    ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('L\'acconto deve essere compreso tra 0 e 100%.')),
+    );
+    return;
+    }
     // Verifica che tutti i campi obbligatori siano compilati
     if (nome.isEmpty || cognome.isEmpty || citta.isEmpty || via.isEmpty || lavori.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Compila tutti i campi e aggiungi almeno un lavoro.')),
+      );
+      return;
+    }
+
+    //Valida email inserita
+    if (!email.contains('@') || telefono.length < 8) {
+    ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('Inserisci un email valida.')),
+      );
+      return;
+    }
+
+    //Valida numero di telefono 
+    if (telefono.length == 10) {
+    ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('Inserisci un numero di telefono valido.')),
       );
       return;
     }
@@ -38,8 +70,12 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
         'cognome': cognome,
         'citta': citta,
         'via': via,
+        'email': email,
+        'telefono': telefono,
+        'codice_fiscale': codiceFiscale,
       },
       'data_preventivo': dataPreventivo,
+      'acconto': acconto,
       'lavori': lavori,
     };
 
@@ -145,20 +181,30 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Crea Preventivo')),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+@override
+Widget build(BuildContext context) {
+  return Scaffold(
+    appBar: AppBar(title: Text('Crea Preventivo')),
+    body: SafeArea(
+      child: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(), // chiude la tastiera al tap fuori
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             children: [
               TextField(controller: nomeController, decoration: InputDecoration(labelText: 'Nome Cliente')),
               TextField(controller: cognomeController, decoration: InputDecoration(labelText: 'Cognome Cliente')),
               TextField(controller: cittaController, decoration: InputDecoration(labelText: 'Città')),
               TextField(controller: viaController, decoration: InputDecoration(labelText: 'Via')),
+              TextField(controller: emailController, decoration: InputDecoration(labelText: 'Email')),
+              TextField(controller: telefonoController, decoration: InputDecoration(labelText: 'Telefono')),
+              TextField(controller: codiceFiscaleController, decoration: InputDecoration(labelText: 'Codice Fiscale')),
+              TextField(
+                controller: accontoController,
+                decoration: InputDecoration(labelText: 'Acconto (%)'),
+                keyboardType: TextInputType.numberWithOptions(decimal: true),
+              ),
               TextField(
                 controller: dataPreventivoController,
                 decoration: InputDecoration(labelText: 'Data Preventivo'),
@@ -206,10 +252,13 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
               ElevatedButton(onPressed: () => showLavoroDialog(), child: Text('Aggiungi Lavoro')),
               SizedBox(height: 16),
               ElevatedButton(onPressed: savePreventivo, child: Text('Salva Preventivo')),
+              SizedBox(height: 16),
+              Center(child: Text('Fine Form')), // Test visibilità
             ],
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }

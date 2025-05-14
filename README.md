@@ -30,6 +30,7 @@ ER DB:
 +-----------------------+                                               | data_caldaia         |
                                                                         | id_preventivo (FK)   |
                                                                         +----------------------+
+                                                                        
 1-Ogni Cliente può avere più Preventivi: Ogni cliente può ricevere più preventivi per diversi lavori.
 2-Ogni Preventivo può avere più Lavori: Ogni preventivo può contenere più lavori (tipi di lavoro).
 3-Il campo caldaia e data_caldaia si applicano a ciascun Lavoro. Se caldaia è TRUE, allora la data_caldaia deve essere valorizzata.

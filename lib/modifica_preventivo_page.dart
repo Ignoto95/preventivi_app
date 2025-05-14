@@ -18,6 +18,11 @@ class _ModificaPreventivoPageState extends State<ModificaPreventivoPage> {
   late TextEditingController cittaController;
   late TextEditingController prezzoTotaleController;
   late TextEditingController dataPreventivoController;  // Controller per la data
+  late TextEditingController emailController; //Nuovi campi chiesti da simone
+  late TextEditingController telefonoController;
+  late TextEditingController codiceFiscaleController;
+  late TextEditingController accontoController;
+  
 
   List<Map<String, dynamic>> lavori = [];
 
@@ -29,16 +34,30 @@ class _ModificaPreventivoPageState extends State<ModificaPreventivoPage> {
     cognomeClienteController = TextEditingController(text: widget.preventivo["cognome_cliente"]);
     viaController = TextEditingController(text: widget.preventivo["via"]);
     cittaController = TextEditingController(text: widget.preventivo["citta"]);
-    prezzoTotaleController = TextEditingController(text: widget.preventivo["prezzo_totale"].toString());
+    //prezzoTotaleController = TextEditingController(text: widget.preventivo["prezzo_totale"].toString());
     
     // Inizializza la data (se è presente nel preventivo)
     dataPreventivoController = TextEditingController(text: widget.preventivo["data_preventivo"] ?? DateTime.now().toIso8601String().split('T')[0]);
-    
+    emailController = TextEditingController(text: widget.preventivo["email"] ?? '');
+    telefonoController = TextEditingController(text: widget.preventivo["telefono"] ?? '');
+    codiceFiscaleController = TextEditingController(text: widget.preventivo["codice_fiscale"] ?? '');
+    accontoController = TextEditingController(text: widget.preventivo["acconto"]?.toString() ?? '0');
+
+
     lavori = List<Map<String, dynamic>>.from(widget.preventivo["lavori"] ?? []).map((lavoro) {
       lavoro['prezzo'] = double.tryParse(lavoro['prezzo'].toString()) ?? 0.0;
       return lavoro;
     }).toList();
   }
+  // Funzione per calcolare il prezzo totale
+  double calcolaPrezzoTotale() {
+    double totale = 0.0;
+    for (var lavoro in lavori) {
+      totale += lavoro['prezzo'];
+    }
+    return totale;
+  }
+
 
   // Funzione per selezionare la data
   Future<void> _selectDate(BuildContext context) async {
@@ -56,43 +75,48 @@ class _ModificaPreventivoPageState extends State<ModificaPreventivoPage> {
     }
   }
 
-  Future<void> salvaPreventivo() async {
-    try {
-      // Costruzione del payload da inviare al server
-      final Map<String, dynamic> preventivoAggiornato = {
-        "id_preventivo": widget.preventivo["id_preventivo"],
-        "nome_cliente": nomeClienteController.text.trim(),
-        "cognome_cliente": cognomeClienteController.text.trim(),
-        "via": viaController.text.trim(),
-        "citta": cittaController.text.trim(),
-        "prezzo_totale": double.tryParse(prezzoTotaleController.text.trim()) ?? 0.0,
-        "data_preventivo": dataPreventivoController.text,  // Invia la data
-        "lavori": lavori,  // Invia l'array dei lavori aggiornati al server
-      };
+Future<void> salvaPreventivo() async {
+  try {
+    // Costruzione del payload da inviare al server
+    final Map<String, dynamic> preventivoAggiornato = {
+      "id_preventivo": widget.preventivo["id_preventivo"],
+      "nome_cliente": nomeClienteController.text.trim(),
+      "cognome_cliente": cognomeClienteController.text.trim(),
+      "via": viaController.text.trim(),
+      "citta": cittaController.text.trim(),
+      "prezzo_totale": calcolaPrezzoTotale(),  // Prezzo totale calcolato dinamicamente
+      "data_preventivo": dataPreventivoController.text,  // Invia la data
+      "lavori": lavori,  // Invia l'array dei lavori aggiornati al server
+        // Nuovi campi
+      "telefono": telefonoController.text.trim(),
+      "email": emailController.text.trim(),
+      "codice_fiscale": codiceFiscaleController.text.trim(),
+      "acconto": double.tryParse(accontoController.text.trim()) ?? 0.0,
+    };
 
-      print('Dati inviati al server:');
-      print(json.encode(preventivoAggiornato));
+    print('Dati inviati al server:');
+    print(json.encode(preventivoAggiornato));
 
-      final response = await http.put(
-        Uri.parse('http://94.176.182.61:3000/preventivi/modifica'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode(preventivoAggiornato),
-      );
+    final response = await http.put(
+      Uri.parse('http://94.176.182.61:3000/preventivi/modifica'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode(preventivoAggiornato),
+    );
 
-      if (response.statusCode == 200) {
-        Navigator.pop(context, true); // Torna alla pagina precedente e aggiorna
-      } else {
-        print('Errore durante l\'aggiornamento del preventivo. Codice: ${response.statusCode}');
-        print('Risposta del server: ${response.body}');
-        throw Exception('Errore durante l\'aggiornamento del preventivo');
-      }
-    } catch (e) {
-      print('Errore: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Errore durante l\'aggiornamento del preventivo.')),
-      );
+    if (response.statusCode == 200) {
+      Navigator.pop(context, true); // Torna alla pagina precedente e aggiorna
+    } else {
+      print('Errore durante l\'aggiornamento del preventivo. Codice: ${response.statusCode}');
+      print('Risposta del server: ${response.body}');
+      throw Exception('Errore durante l\'aggiornamento del preventivo');
     }
+  } catch (e) {
+    print('Errore: $e');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Errore durante l\'aggiornamento del preventivo.')),
+    );
   }
+}
 
   void showLavoroDialog({Map<String, dynamic>? lavoro, int? index}) {
     final TextEditingController tipoController = TextEditingController(
@@ -169,7 +193,28 @@ class _ModificaPreventivoPageState extends State<ModificaPreventivoPage> {
               TextField(controller: cognomeClienteController, decoration: InputDecoration(labelText: 'Cognome Cliente')),
               TextField(controller: viaController, decoration: InputDecoration(labelText: 'Via')),
               TextField(controller: cittaController, decoration: InputDecoration(labelText: 'Città')),
-              TextField(controller: prezzoTotaleController, decoration: InputDecoration(labelText: 'Prezzo Totale (€)')),
+              TextField(
+                        controller: telefonoController,
+                        decoration: InputDecoration(labelText: 'Telefono'),
+                        keyboardType: TextInputType.phone,
+                      ),
+                      TextField(
+                        controller: emailController,
+                        decoration: InputDecoration(labelText: 'Email'),
+                        keyboardType: TextInputType.emailAddress,
+                      ),
+                      TextField(
+                        controller: codiceFiscaleController,
+                        decoration: InputDecoration(labelText: 'Codice Fiscale'),
+                      ),
+                      TextField(
+                        controller: accontoController,
+                        decoration: InputDecoration(labelText: 'Acconto (€)'),
+                        keyboardType: TextInputType.numberWithOptions(decimal: true),
+                      ),
+
+
+              //TextField(controller: prezzoTotaleController, decoration: InputDecoration(labelText: 'Prezzo Totale (€)')),
               
               // Aggiungi il campo Data Preventivo
               TextField(
@@ -215,6 +260,10 @@ class _ModificaPreventivoPageState extends State<ModificaPreventivoPage> {
                     ),
                   );
                 },
+              ),
+              Text(
+                'Prezzo Totale: €${calcolaPrezzoTotale().toStringAsFixed(2)}',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
               ),
               SizedBox(height: 16),
               ElevatedButton(onPressed: () => showLavoroDialog(), child: Text('Aggiungi Lavoro')),

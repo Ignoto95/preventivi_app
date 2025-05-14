@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:preventivi_app/services/pdf_service.dart';
-import 'create_preventivo_page.dart';
 import 'modifica_preventivo_page.dart';
+import 'create_preventivo_page.dart' as createCompleto;
+import 'create_preventivo_from_cliente_page.dart' as createDaCliente;
 
 class HomePage extends StatefulWidget {
   @override
@@ -12,8 +12,11 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  List<Map<String, dynamic>> preventivi = [];
+  Map<String, List<Map<String, dynamic>>> clientiConPreventivi = {};
   String searchQuery = "";
+  String? filtroAnno;
+  String? filtroMese;
+  String? filtroGiorno;
   bool isLoading = true;
 
   @override
@@ -33,8 +36,20 @@ class _HomePageState extends State<HomePage> {
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
 
+        Map<String, List<Map<String, dynamic>>> clienti = {};
+
+        for (var item in data) {
+          final clienteKey = "${item["nome_cliente"]} ${item["cognome_cliente"]}";
+
+          if (!clienti.containsKey(clienteKey)) {
+            clienti[clienteKey] = [];
+          }
+
+          clienti[clienteKey]!.add(item);
+        }
+
         setState(() {
-          preventivi = data.map((item) => Map<String, dynamic>.from(item)).toList();
+          clientiConPreventivi = clienti;
           isLoading = false;
         });
       } else {
@@ -50,15 +65,64 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    List<Map<String, dynamic>> filteredPreventivi = preventivi
-        .where((preventivo) => preventivo["nome_cliente"].toLowerCase().contains(searchQuery.toLowerCase()))
-        .toList();
-
     User? currentUser = FirebaseAuth.instance.currentUser;
-
+  Widget _buildFiltroDataSheet() {
+  return Padding(
+    padding: const EdgeInsets.all(16.0),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('Filtra per Data', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                decoration: InputDecoration(labelText: 'Anno (es. 2025)'),
+                keyboardType: TextInputType.number,
+                onChanged: (val) {
+                  filtroAnno = val.isNotEmpty ? val : null;
+                },
+              ),
+            ),
+            SizedBox(width: 10),
+            Expanded(
+              child: TextField(
+                decoration: InputDecoration(labelText: 'Mese (es. 05)'),
+                keyboardType: TextInputType.number,
+                onChanged: (val) {
+                  filtroMese = val.isNotEmpty ? val : null;
+                },
+              ),
+            ),
+            SizedBox(width: 10),
+            Expanded(
+              child: TextField(
+                decoration: InputDecoration(labelText: 'Giorno (es. 14)'),
+                keyboardType: TextInputType.number,
+                onChanged: (val) {
+                  filtroGiorno = val.isNotEmpty ? val : null;
+                },
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 20),
+        ElevatedButton.icon(
+          icon: Icon(Icons.check),
+          label: Text('Applica filtro'),
+          onPressed: () {
+            setState(() {});
+            Navigator.pop(context);
+          },
+        ),
+      ],
+    ),
+  );
+}
     return Scaffold(
       appBar: AppBar(
-        title: Text('Preventivi'),
+        title: Text('Clienti & Preventivi'),
         actions: [
           PopupMenuButton(
             icon: Icon(Icons.account_circle),
@@ -92,22 +156,19 @@ class _HomePageState extends State<HomePage> {
                   onPressed: () async {
                     final result = await Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (context) => CreatePreventivoPage()),
+                      MaterialPageRoute(builder: (context) => createCompleto.CreatePreventivoPage()),
                     );
-
-                    if (result == true) {
-                      fetchPreventivi();
-                    }
+                    if (result == true) fetchPreventivi();
                   },
                   icon: Icon(Icons.add),
-                  label: Text('Nuovo Preventivo'),
+                  label: Text('Nuovo Cliente/Preventivo'),
                 ),
               ],
             ),
             SizedBox(height: 10),
             TextField(
               decoration: InputDecoration(
-                labelText: 'Cerca per Cliente',
+                labelText: 'Cerca Cliente',
                 prefixIcon: Icon(Icons.search),
                 border: OutlineInputBorder(),
               ),
@@ -117,155 +178,197 @@ class _HomePageState extends State<HomePage> {
                 });
               },
             ),
+            SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                IconButton(
+                    icon: Icon(
+                    Icons.filter_list,
+                    color: (filtroAnno != null || filtroMese != null || filtroGiorno != null)
+                        ? Colors.orange
+                        : null,
+                  ),
+                  tooltip: 'Filtra per data',
+                  onPressed: () async {
+                    await showModalBottomSheet(
+                      context: context,
+                      builder: (context) => _buildFiltroDataSheet(),
+                    );
+                  },
+                ),
+                IconButton(
+                  icon: Icon(Icons.clear),
+                  tooltip: 'Pulisci filtro',
+                  onPressed: () {
+                    setState(() {
+                      filtroAnno = null;
+                      filtroMese = null;
+                      filtroGiorno = null;
+                    });
+                  },
+                  ),
+              ],
+            ),
             SizedBox(height: 10),
             Expanded(
               child: isLoading
                   ? Center(child: CircularProgressIndicator())
-                  : filteredPreventivi.isEmpty
-                      ? Center(child: Text('Nessun preventivo trovato'))
-                      : ListView.builder(
-                          itemCount: filteredPreventivi.length,
-                          itemBuilder: (context, index) {
-                            final preventivo = filteredPreventivi[index];
-                            List<dynamic> lavoriList = json.decode(json.encode(preventivo["lavori"] ?? []));
+                  : clientiConPreventivi.isEmpty
+                      ? Center(child: Text('Nessun cliente trovato'))
+                      : ListView(
+                          children: clientiConPreventivi.entries
+                              .where((entry) => entry.key.toLowerCase().contains(searchQuery.toLowerCase()))
+                              .map((entry) {
+                            final nomeCliente = entry.key;
+                            final preventivi = entry.value;     
+                            final preventiviFiltrati = preventivi.where((p) {
+                              final data = DateTime.tryParse(p["data_preventivo"] ?? '') ?? DateTime.now();
+                              final matchAnno = filtroAnno == null || data.year.toString() == filtroAnno;
+                              final matchMese = filtroMese == null || data.month.toString().padLeft(2, '0') == filtroMese;
+                              final matchGiorno = filtroGiorno == null || data.day.toString().padLeft(2, '0') == filtroGiorno;
+                              return matchAnno && matchMese && matchGiorno;
+                            }).toList();
+
+                            if (preventiviFiltrati.isEmpty) return SizedBox.shrink(); // Nascondi se non ci sono preventivi dopo il filtro
+
+                            final preventiviPerAnno = groupPreventiviByAnno(preventiviFiltrati);
 
                             return Card(
+                              elevation: 3,
                               margin: EdgeInsets.symmetric(vertical: 8.0),
-                              elevation: 4.0,
-                              child: Padding(
-                                padding: const EdgeInsets.all(16.0),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                              child: ExpansionTile(
+                                title: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
-                                    Text('Codice: ${preventivo["id_preventivo"]}',
-                                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                                    SizedBox(height: 4),
-                                    Text('Cliente: ${preventivo["nome_cliente"]} ${preventivo["cognome_cliente"]}'),
-                                    Text('Comune: ${preventivo["citta"]}'),
-                                    Text('Indirizzo: ${preventivo["via"]}'),
-                                    Text('Prezzo Totale: €${preventivo["prezzo_totale"]}'),
-                                    SizedBox(height: 4),
-
-                                    // Visualizzazione dei lavori
-                                    lavoriList.isNotEmpty
-                                        ? Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Text('Lavori:', style: TextStyle(fontWeight: FontWeight.bold)),
-                                              ...lavoriList.map((lavoro) {
-                                                return Text(
-                                                  '- ${lavoro["tipo_lavoro"]}: ${lavoro["descrizione_lavoro"]} (€${lavoro["prezzo"]})',
-                                                );
-                                              }).toList(),
-                                            ],
-                                          )
-                                        : Text('Lavori: Nessun lavoro'),
-
-                                    SizedBox(height: 10),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.end,
-                                      children: [
-                                        IconButton(
-                                          icon: Icon(Icons.edit, color: Colors.blue),
-                                          onPressed: () {
-                                            Navigator.push(
-                                              context,
-                                              MaterialPageRoute(
-                                                builder: (context) => ModificaPreventivoPage(preventivo: preventivo),
-                                              ),
-                                            ).then((result) {
-                                              if (result == true) {
-                                                fetchPreventivi();
-                                              }
-                                            });
-                                          },
-                                        ),
-                                        IconButton(
-                                          icon: Icon(Icons.delete, color: Colors.red),
-                                          onPressed: () {
-                                            // Eliminazione del preventivo
-                                            showDialog(
-                                              context: context,
-                                              builder: (BuildContext context) {
-                                                return AlertDialog(
-                                                  title: Text('Conferma eliminazione'),
-                                                  content: Text('Sei sicuro di voler eliminare questo preventivo?'),
-                                                  actions: [
-                                                    TextButton(
-                                                      onPressed: () {
-                                                        Navigator.pop(context);
-                                                      },
-                                                      child: Text('Annulla'),
-                                                    ),
-                                                    TextButton(
-                                                      onPressed: () async {
-                                                        setState(() {
-                                                          preventivi.removeAt(index);
-                                                        });
-
-                                                        try {
-                                                          final response = await http.delete(
-                                                            Uri.parse('http://94.176.182.61:3000/preventivo/${preventivo["id_preventivo"]}'),
-                                                          );
-
-                                                          if (response.statusCode == 200) {
-                                                            Navigator.pop(context);
-                                                          } else {
-                                                            throw Exception('Errore durante l\'eliminazione');
-                                                          }
-                                                        } catch (e) {
-                                                          print('Errore: $e');
-                                                          setState(() {
-                                                            preventivi.insert(index, preventivo);
-                                                          });
-                                                          Navigator.pop(context);
-                                                          showDialog(
-                                                            context: context,
-                                                            builder: (BuildContext context) {
-                                                              return AlertDialog(
-                                                                title: Text('Errore'),
-                                                                content: Text('Non è stato possibile eliminare il preventivo. Riprova.'),
-                                                                actions: [
-                                                                  TextButton(
-                                                                    onPressed: () {
-                                                                      Navigator.pop(context);
-                                                                    },
-                                                                    child: Text('OK'),
-                                                                  ),
-                                                                ],
-                                                              );
-                                                            },
-                                                          );
-                                                        }
-                                                      },
-                                                      child: Text('Elimina'),
-                                                    ),
-                                                  ],
-                                                );
-                                              },
-                                            );
-                                          },
-                                        ),
-IconButton(
-  icon: Icon(Icons.picture_as_pdf, color: Colors.green),
-  onPressed: () async {
-    //int preventivoId = preventivo["id_preventivo"]; // Estrai l'ID del preventivo
-    //await PDFService.generateAndDownloadPDF(preventivoId); // Passa l'ID corretto
-    downloadPdf('http://94.176.182.61:3000/generate-pdf/33');
-  },
-),
-                                      ],
-                                    )
+                                    Expanded(
+                                      child: Text(nomeCliente, style: TextStyle(fontWeight: FontWeight.bold)),
+                                    ),
+                                    IconButton(
+                                      icon: Icon(Icons.note_add, color: Colors.green),
+                                      tooltip: 'Nuovo preventivo per $nomeCliente',
+                                      onPressed: () async {
+                                        final parts = nomeCliente.split(' ');
+                                        final nome = parts.first;
+                                        final cognome = parts.length > 1 ? parts.sublist(1).join(' ') : '';
+                                
+                                        final result = await Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) => createDaCliente.CreatePreventivoFromClientePage(
+                                              nome: nome,
+                                              cognome: cognome,
+                                            ),
+                                          ),
+                                        );
+                                        if (result == true) fetchPreventivi();
+                                      },
+                                    ),
                                   ],
                                 ),
+                                subtitle: Text(preventivi.first['email'] ?? ''),
+                                children: preventiviPerAnno.entries.map((annoEntry) {
+                                  return Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Padding(
+                                        padding: const EdgeInsets.only(left: 16.0, top: 8),
+                                        child: Text('Anno ${annoEntry.key}',
+                                            style: TextStyle(fontWeight: FontWeight.bold)),
+                                      ),
+                                      ...annoEntry.value.map((preventivo) {
+                                        return ListTile(
+                                          title: Text('Preventivo #${preventivo["id_preventivo"]}'),
+                                          subtitle: Text('Data: ${preventivo["data_preventivo"]}, Totale: €${preventivo["prezzo_totale"]}'),
+                                          trailing: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              IconButton(
+                                                icon: Icon(Icons.edit, color: Colors.blue),
+                                                onPressed: () async {
+                                                  final result = await Navigator.push(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (context) => ModificaPreventivoPage(preventivo: preventivo),
+                                                    ),
+                                                  );
+                                                  if (result == true) fetchPreventivi();
+                                                },
+                                              ),
+                                              IconButton(
+                                                icon: Icon(Icons.delete, color: Colors.red),
+                                                onPressed: () async {
+                                                  final shouldDelete = await showDialog<bool>(
+                                                    context: context,
+                                                    builder: (context) => AlertDialog(
+                                                      title: Text('Conferma eliminazione'),
+                                                      content: Text('Sei sicuro di voler eliminare il preventivo #${preventivo["id_preventivo"]}?'),
+                                                      actions: [
+                                                        TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Annulla')),
+                                                        TextButton(onPressed: () => Navigator.pop(context, true), child: Text('Elimina')),
+                                                      ],
+                                                    ),
+                                                  );
+                                          
+                                                  if (shouldDelete == true) {
+                                                    final response = await http.delete(
+                                                      Uri.parse('http://94.176.182.61:3000/preventivo/${preventivo["id_preventivo"]}'),
+                                                    );
+                                          
+                                                    if (response.statusCode == 200) {
+                                                      setState(() {
+                                                        // Rimuovi il preventivo dalla lista locale
+                                                        clientiConPreventivi.forEach((cliente, preventivi) {
+                                                          preventivi.removeWhere((p) => p["id_preventivo"] == preventivo["id_preventivo"]);
+                                                        });
+                                          
+                                                        // Se non ci sono più preventivi per un cliente, rimuovi anche il cliente
+                                                        clientiConPreventivi.removeWhere((cliente, preventivi) => preventivi.isEmpty);
+                                                      });
+
+                                                      // Aggiungi un messaggio di successo
+                                                      ScaffoldMessenger.of(context).showSnackBar(
+                                                        SnackBar(content: Text('Preventivo eliminato con successo')),
+                                                      );
+                                                    } else {
+                                                      ScaffoldMessenger.of(context).showSnackBar(
+                                                        SnackBar(content: Text('Errore durante l\'eliminazione del preventivo')),
+                                                      );
+                                                    }
+                                                  }
+                                                },
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      }).toList(),
+                                    ],
+                                  );
+                                }).toList(),
                               ),
                             );
-                          },
+                          }).toList(),
                         ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  Map<String, List<Map<String, dynamic>>> groupPreventiviByAnno(List<Map<String, dynamic>> preventivi) {
+    final Map<String, List<Map<String, dynamic>>> grouped = {};
+
+    for (var preventivo in preventivi) {
+      final date = DateTime.tryParse(preventivo["data_preventivo"] ?? '') ?? DateTime.now();
+      final year = date.year.toString();
+
+      if (!grouped.containsKey(year)) {
+        grouped[year] = [];
+      }
+      grouped[year]!.add(preventivo);
+    }
+
+    return grouped;
   }
 }
