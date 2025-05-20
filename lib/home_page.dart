@@ -5,6 +5,11 @@ import 'dart:convert';
 import 'modifica_preventivo_page.dart';
 import 'create_preventivo_page.dart' as createCompleto;
 import 'create_preventivo_from_cliente_page.dart' as createDaCliente;
+import 'package:url_launcher/url_launcher.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:open_file/open_file.dart';
+import 'dart:io';
+import 'services/pdf_service.dart';
 
 class HomePage extends StatefulWidget {
   @override
@@ -280,66 +285,78 @@ class _HomePageState extends State<HomePage> {
                                         return ListTile(
                                           title: Text('Preventivo #${preventivo["id_preventivo"]}'),
                                           subtitle: Text('Data: ${preventivo["data_preventivo"]}, Totale: €${preventivo["prezzo_totale"]}'),
-                                          trailing: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              IconButton(
-                                                icon: Icon(Icons.edit, color: Colors.blue),
-                                                onPressed: () async {
-                                                  final result = await Navigator.push(
-                                                    context,
-                                                    MaterialPageRoute(
-                                                      builder: (context) => ModificaPreventivoPage(preventivo: preventivo),
-                                                    ),
-                                                  );
-                                                  if (result == true) fetchPreventivi();
-                                                },
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                      IconButton(
+                                        icon: Icon(Icons.picture_as_pdf, color: Colors.orange),
+                                        tooltip: 'Genera PDF',
+                                        onPressed: () async {
+                                          try {
+                                            // Passa l'id e TUTTI i dati del preventivo come mappa
+                                            await PdfService.generateAndOpenPdf(preventivo["id_preventivo"], preventivo);
+                                          } catch (e) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(content: Text('$e')),
+                                            );
+                                          }
+                                        },
+                                      ),
+                                        IconButton(
+                                          icon: Icon(Icons.edit, color: Colors.blue),
+                                          onPressed: () async {
+                                            final result = await Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (context) =>
+                                                    ModificaPreventivoPage(preventivo: preventivo),
                                               ),
-                                              IconButton(
-                                                icon: Icon(Icons.delete, color: Colors.red),
-                                                onPressed: () async {
-                                                  final shouldDelete = await showDialog<bool>(
-                                                    context: context,
-                                                    builder: (context) => AlertDialog(
-                                                      title: Text('Conferma eliminazione'),
-                                                      content: Text('Sei sicuro di voler eliminare il preventivo #${preventivo["id_preventivo"]}?'),
-                                                      actions: [
-                                                        TextButton(onPressed: () => Navigator.pop(context, false), child: Text('Annulla')),
-                                                        TextButton(onPressed: () => Navigator.pop(context, true), child: Text('Elimina')),
-                                                      ],
-                                                    ),
-                                                  );
-                                          
-                                                  if (shouldDelete == true) {
-                                                    final response = await http.delete(
-                                                      Uri.parse('http://94.176.182.61:3000/preventivo/${preventivo["id_preventivo"]}'),
-                                                    );
-                                          
-                                                    if (response.statusCode == 200) {
-                                                      setState(() {
-                                                        // Rimuovi il preventivo dalla lista locale
-                                                        clientiConPreventivi.forEach((cliente, preventivi) {
-                                                          preventivi.removeWhere((p) => p["id_preventivo"] == preventivo["id_preventivo"]);
-                                                        });
-                                          
-                                                        // Se non ci sono più preventivi per un cliente, rimuovi anche il cliente
-                                                        clientiConPreventivi.removeWhere((cliente, preventivi) => preventivi.isEmpty);
-                                                      });
+                                            );
+                                            if (result == true) {
+                                              fetchPreventivi();
+                                            }
+                                          },
+                                        ),
+                                        IconButton(
+                                          icon: Icon(Icons.delete, color: Colors.red),
+                                          onPressed: () async {
+                                            final shouldDelete = await showDialog<bool>(
+                                              context: context,
+                                              builder: (context) => AlertDialog(
+                                                title: Text('Conferma eliminazione'),
+                                                content: Text(
+                                                    'Sei sicuro di voler eliminare il preventivo #${preventivo["id_preventivo"]}?'),
+                                                actions: [
+                                                  TextButton(
+                                                    onPressed: () => Navigator.pop(context, false),
+                                                    child: Text('Annulla'),
+                                                  ),
+                                                  TextButton(
+                                                    onPressed: () => Navigator.pop(context, true),
+                                                    child: Text('Elimina'),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
 
-                                                      // Aggiungi un messaggio di successo
-                                                      ScaffoldMessenger.of(context).showSnackBar(
-                                                        SnackBar(content: Text('Preventivo eliminato con successo')),
-                                                      );
-                                                    } else {
-                                                      ScaffoldMessenger.of(context).showSnackBar(
-                                                        SnackBar(content: Text('Errore durante l\'eliminazione del preventivo')),
-                                                      );
-                                                    }
-                                                  }
-                                                },
-                                              ),
-                                            ],
-                                          ),
+                                            if (shouldDelete == true) {
+                                              final response = await http.delete(
+                                                Uri.parse('http://94.176.182.61:3000/preventivo/${preventivo["id_preventivo"]}'),
+                                              );
+
+                                              if (response.statusCode == 200) {
+                                                setState(() {
+                                                  clientiConPreventivi.forEach((cliente, preventivi) {
+                                                    preventivi.removeWhere(
+                                                        (p) => p["id_preventivo"] == preventivo["id_preventivo"]);
+                                                  });
+                                                });
+                                              }
+                                            }
+                                          },
+                                        ),
+                                      ],
+                                    ),
                                         );
                                       }).toList(),
                                     ],

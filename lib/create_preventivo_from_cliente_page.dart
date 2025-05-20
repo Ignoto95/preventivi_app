@@ -24,6 +24,19 @@ class _CreatePreventivoFromClientePageState extends State<CreatePreventivoFromCl
   final TextEditingController codiceFiscaleController = TextEditingController();
   final TextEditingController accontoController = TextEditingController();
   final List<Map<String, dynamic>> lavori = [];
+  List<Map<String, TextEditingController>> rateControllers = [];
+
+@override
+void initState() {
+  super.initState();
+  // Inizialmente una rata di esempio
+  rateControllers.add({
+    'descrizione': TextEditingController(),
+    'percentuale': TextEditingController(),
+  });
+}
+
+
 
   Future<void> savePreventivo() async {
     final citta = cittaController.text.trim();
@@ -55,6 +68,26 @@ class _CreatePreventivoFromClientePageState extends State<CreatePreventivoFromCl
       );
       return;
     }
+    
+    final rate = rateControllers.map((rata) {
+      final descrizione = rata['descrizione']!.text.trim();
+      final percentualeText = rata['percentuale']!.text.trim();
+      final percentuale = double.tryParse(percentualeText) ?? 0;
+      return {
+        'descrizione': descrizione,
+        'percentuale': percentuale,
+      };
+    }).toList();
+    
+    final sommaPercentuali = rate.fold<double>(0, (sum, r) => sum + (r['percentuale'] as double));
+    
+    if (sommaPercentuali > 100) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('La somma delle percentuali delle rate non può superare il 100%.')),
+      );
+      return;
+    }
+
 
     final preventivoData = {
       'cliente': {
@@ -69,7 +102,9 @@ class _CreatePreventivoFromClientePageState extends State<CreatePreventivoFromCl
       'data_preventivo': dataPreventivo,
       'acconto': acconto,
       'lavori': lavori,
+      'rate': rate,
     };
+
 
     try {
       final response = await http.post(
@@ -237,9 +272,49 @@ class _CreatePreventivoFromClientePageState extends State<CreatePreventivoFromCl
                 SizedBox(height: 16),
                 ElevatedButton(onPressed: () => showLavoroDialog(), child: Text('Aggiungi Lavoro')),
                 SizedBox(height: 16),
-                ElevatedButton(onPressed: savePreventivo, child: Text('Salva Preventivo')),
+                Text('Rate di Pagamento:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: NeverScrollableScrollPhysics(),
+                  itemCount: rateControllers.length,
+                  itemBuilder: (context, index) {
+                    return Card(
+                      margin: EdgeInsets.symmetric(vertical: 8),
+                      child: ListTile(
+                        title: TextField(
+                          controller: rateControllers[index]['descrizione'],
+                          decoration: InputDecoration(labelText: 'Descrizione Rata ${index + 1}'),
+                        ),
+                        subtitle: TextField(
+                          controller: rateControllers[index]['percentuale'],
+                          decoration: InputDecoration(labelText: 'Percentuale (%)'),
+                          keyboardType: TextInputType.numberWithOptions(decimal: true),
+                        ),
+                        trailing: IconButton(
+                          icon: Icon(Icons.delete, color: Colors.red),
+                          onPressed: () {
+                            setState(() {
+                              rateControllers.removeAt(index);
+                            });
+                          },
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      rateControllers.add({
+                        'descrizione': TextEditingController(),
+                        'percentuale': TextEditingController(),
+                      });
+                    });
+                  },
+                  child: Text('Aggiungi Rata'),
+                ),
                 SizedBox(height: 16),
-                Center(child: Text('Fine Form')),
+                ElevatedButton(onPressed: savePreventivo, child: Text('Salva Preventivo')),
               ],
             ),
           ),

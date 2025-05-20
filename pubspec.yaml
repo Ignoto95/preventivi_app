@@ -15,9 +15,11 @@ dependencies:
   firebase_auth: any
   intl: ^0.20.1
   pdf: ^3.11.1
-  path_provider: ^2.0.14
+  path_provider: ^2.1.1
   printing: ^5.10.0
   js: ^0.6.3
+  url_launcher: ^6.2.4
+  open_file: ^3.2.1
 
   # Per le richieste HTTP al server
   http: any

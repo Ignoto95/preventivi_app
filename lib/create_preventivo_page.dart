@@ -5,6 +5,8 @@ import 'dart:convert';
 class CreatePreventivoPage extends StatefulWidget {
   @override
   _CreatePreventivoPageState createState() => _CreatePreventivoPageState();
+  
+
 }
 
 class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
@@ -18,91 +20,124 @@ class _CreatePreventivoPageState extends State<CreatePreventivoPage> {
   final TextEditingController codiceFiscaleController = TextEditingController();
   final TextEditingController accontoController = TextEditingController();
   final List<Map<String, dynamic>> lavori = [];
+  List<Map<String, TextEditingController>> rateControllers = [];
+
+@override
+void initState() {
+  super.initState();
+  // Inizialmente una rata di esempio
+  rateControllers.add({
+    'descrizione': TextEditingController(),
+    'percentuale': TextEditingController(),
+  });
+}
 
   // Funzione per salvare il preventivo
-  Future<void> savePreventivo() async {
-    final nome = nomeController.text.trim();
-    final cognome = cognomeController.text.trim();
-    final citta = cittaController.text.trim();
-    final via = viaController.text.trim();
-    final dataPreventivo = dataPreventivoController.text.trim();
-    final email = emailController.text.trim();
-    final telefono = telefonoController.text.trim();
-    final codiceFiscale = codiceFiscaleController.text.trim();
-    final accontoText = accontoController.text.trim();
-    final acconto = double.tryParse(accontoText) ?? 0;
+Future<void> savePreventivo() async {
+  final nome = nomeController.text.trim();
+  final cognome = cognomeController.text.trim();
+  final citta = cittaController.text.trim();
+  final via = viaController.text.trim();
+  final dataPreventivo = dataPreventivoController.text.trim();
+  final email = emailController.text.trim();
+  final telefono = telefonoController.text.trim();
+  final codiceFiscale = codiceFiscaleController.text.trim();
+  final accontoText = accontoController.text.trim();
+  final acconto = double.tryParse(accontoText) ?? 0;
 
-    //Validazione dell'acconto
-    if (acconto < 0 || acconto > 100) {
+  // Validazione acconto
+  if (acconto < 0 || acconto > 100) {
     ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('L\'acconto deve essere compreso tra 0 e 100%.')),
+      SnackBar(content: Text('L\'acconto deve essere compreso tra 0 e 100%.')),
     );
     return;
-    }
-    // Verifica che tutti i campi obbligatori siano compilati
-    if (nome.isEmpty || cognome.isEmpty || citta.isEmpty || via.isEmpty || lavori.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Compila tutti i campi e aggiungi almeno un lavoro.')),
-      );
-      return;
-    }
-
-    //Valida email inserita
-    if (!email.contains('@') || telefono.length < 8) {
-    ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('Inserisci un email valida.')),
-      );
-      return;
-    }
-
-    //Valida numero di telefono 
-    if (telefono.length == 10) {
-    ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('Inserisci un numero di telefono valido.')),
-      );
-      return;
-    }
-
-    // Creazione del payload per l'API
-    final preventivoData = {
-      'cliente': {
-        'nome': nome,
-        'cognome': cognome,
-        'citta': citta,
-        'via': via,
-        'email': email,
-        'telefono': telefono,
-        'codice_fiscale': codiceFiscale,
-      },
-      'data_preventivo': dataPreventivo,
-      'acconto': acconto,
-      'lavori': lavori,
-    };
-
-    try {
-      // Chiamata HTTP per salvare il preventivo
-      final response = await http.post(
-        Uri.parse('http://94.176.182.61:3000/preventivo'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode(preventivoData),
-      );
-
-      if (response.statusCode == 200 || response.statusCode == 201 ) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Preventivo salvato con successo!')),
-        );
-        Navigator.pop(context, true); // Torna alla Home con valore true
-      } else {
-        print('Errore: ${response.statusCode}');
-        print('Corpo risposta: ${response.body}');
-        throw Exception('Errore nel salvataggio del preventivo: ${response.body}');
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Errore: ${e.toString()}')),
-      );
-    }
   }
+
+  // Validazione campi obbligatori
+  if (nome.isEmpty || cognome.isEmpty || citta.isEmpty || via.isEmpty || lavori.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Compila tutti i campi e aggiungi almeno un lavoro.')),
+    );
+    return;
+  }
+
+  // Validazione email
+  if (!email.contains('@')) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Inserisci un\'email valida.')),
+    );
+    return;
+  }
+
+  // Validazione telefono
+  if (telefono.length < 8 || telefono.length > 15) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Inserisci un numero di telefono valido.')),
+    );
+    return;
+  }
+
+  // Parsing delle rate
+  final rate = rateControllers.map((rata) {
+    final descrizione = rata['descrizione']!.text.trim();
+    final percentualeText = rata['percentuale']!.text.trim();
+    final percentuale = double.tryParse(percentualeText) ?? 0;
+    return {
+      'descrizione': descrizione,
+      'percentuale': percentuale,
+    };
+  }).toList();
+
+  // Validazione percentuali
+  final sommaPercentuali = rate.fold<double>(0, (sum, r) => sum + (r['percentuale'] as double));
+  if (sommaPercentuali > 100) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('La somma delle percentuali delle rate non può superare il 100%.')),
+    );
+    return;
+  }
+
+  // Payload finale
+  final preventivoData = {
+    'cliente': {
+      'nome': nome,
+      'cognome': cognome,
+      'citta': citta,
+      'via': via,
+      'email': email,
+      'telefono': telefono,
+      'codice_fiscale': codiceFiscale,
+    },
+    'data_preventivo': dataPreventivo,
+    'acconto': acconto,
+    'lavori': lavori,
+    'rate': rate,
+  };
+
+  try {
+    final response = await http.post(
+      Uri.parse('http://94.176.182.61:3000/preventivo'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode(preventivoData),
+    );
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Preventivo salvato con successo!')),
+      );
+      Navigator.pop(context, true);
+    } else {
+      print('Errore: ${response.statusCode}');
+      print('Corpo risposta: ${response.body}');
+      throw Exception('Errore nel salvataggio del preventivo: ${response.body}');
+    }
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Errore: ${e.toString()}')),
+    );
+  }
+}
+
 
   // Funzione per selezionare la data tramite DatePicker
   Future<void> _selectDate(BuildContext context) async {
@@ -250,10 +285,50 @@ Widget build(BuildContext context) {
               ),
               SizedBox(height: 16),
               ElevatedButton(onPressed: () => showLavoroDialog(), child: Text('Aggiungi Lavoro')),
+                              SizedBox(height: 16),
+                Text('Rate di Pagamento:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                ListView.builder(
+                  shrinkWrap: true,
+                  physics: NeverScrollableScrollPhysics(),
+                  itemCount: rateControllers.length,
+                  itemBuilder: (context, index) {
+                    return Card(
+                      margin: EdgeInsets.symmetric(vertical: 8),
+                      child: ListTile(
+                        title: TextField(
+                          controller: rateControllers[index]['descrizione'],
+                          decoration: InputDecoration(labelText: 'Descrizione Rata ${index + 1}'),
+                        ),
+                        subtitle: TextField(
+                          controller: rateControllers[index]['percentuale'],
+                          decoration: InputDecoration(labelText: 'Percentuale (%)'),
+                          keyboardType: TextInputType.numberWithOptions(decimal: true),
+                        ),
+                        trailing: IconButton(
+                          icon: Icon(Icons.delete, color: Colors.red),
+                          onPressed: () {
+                            setState(() {
+                              rateControllers.removeAt(index);
+                            });
+                          },
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      rateControllers.add({
+                        'descrizione': TextEditingController(),
+                        'percentuale': TextEditingController(),
+                      });
+                    });
+                  },
+                  child: Text('Aggiungi Rata'),
+                ),
               SizedBox(height: 16),
               ElevatedButton(onPressed: savePreventivo, child: Text('Salva Preventivo')),
-              SizedBox(height: 16),
-              Center(child: Text('Fine Form')), // Test visibilità
             ],
           ),
         ),

@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 class ModificaPreventivoPage extends StatefulWidget {
   final Map<String, dynamic> preventivo;
+  
 
   ModificaPreventivoPage({required this.preventivo});
 
@@ -22,13 +23,28 @@ class _ModificaPreventivoPageState extends State<ModificaPreventivoPage> {
   late TextEditingController telefonoController;
   late TextEditingController codiceFiscaleController;
   late TextEditingController accontoController;
-  
+  List<Map<String, TextEditingController>> rateControllers = [];
 
   List<Map<String, dynamic>> lavori = [];
 
   @override
   void initState() {
     super.initState();
+  // Inizializza rateControllers con i dati presenti nel preventivo, se ci sono
+  if (widget.preventivo["rate"] != null) {
+    rateControllers = List<Map<String, TextEditingController>>.from(
+      (widget.preventivo["rate"] as List).map((rata) => {
+        'descrizione': TextEditingController(text: rata['descrizione']),
+        'percentuale': TextEditingController(text: rata['percentuale'].toString()),
+      })
+    );
+  } else {
+    // Se non ci sono rate, almeno una riga vuota
+    rateControllers = [{
+      'descrizione': TextEditingController(),
+      'percentuale': TextEditingController(),
+    }];
+  }
 
     nomeClienteController = TextEditingController(text: widget.preventivo["nome_cliente"]);
     cognomeClienteController = TextEditingController(text: widget.preventivo["cognome_cliente"]);
@@ -76,6 +92,25 @@ class _ModificaPreventivoPageState extends State<ModificaPreventivoPage> {
   }
 
 Future<void> salvaPreventivo() async {
+  final rate = rateControllers.map((rata) {
+  final descrizione = rata['descrizione']!.text.trim();
+  final percentualeText = rata['percentuale']!.text.trim();
+  final percentuale = double.tryParse(percentualeText) ?? 0;
+  return {
+    'descrizione': descrizione,
+    'percentuale': percentuale,
+  };
+}).toList();
+
+final sommaPercentuali = rate.fold<double>(0, (sum, r) => sum + (r['percentuale'] as double));
+
+if (sommaPercentuali > 100) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('La somma delle percentuali delle rate non può superare il 100%.')),
+  );
+  return;
+}
+
   try {
     // Costruzione del payload da inviare al server
     final Map<String, dynamic> preventivoAggiornato = {
@@ -92,6 +127,7 @@ Future<void> salvaPreventivo() async {
       "email": emailController.text.trim(),
       "codice_fiscale": codiceFiscaleController.text.trim(),
       "acconto": double.tryParse(accontoController.text.trim()) ?? 0.0,
+      "rate": rate,
     };
 
     print('Dati inviati al server:');
@@ -189,8 +225,8 @@ Future<void> salvaPreventivo() async {
         child: SingleChildScrollView(
           child: Column(
             children: [
-              TextField(controller: nomeClienteController, decoration: InputDecoration(labelText: 'Nome Cliente')),
-              TextField(controller: cognomeClienteController, decoration: InputDecoration(labelText: 'Cognome Cliente')),
+              TextField(controller: nomeClienteController, decoration: InputDecoration(labelText: 'Nome Cliente'),readOnly: true,),
+              TextField(controller: cognomeClienteController, decoration: InputDecoration(labelText: 'Cognome Cliente'),readOnly: true,),
               TextField(controller: viaController, decoration: InputDecoration(labelText: 'Via')),
               TextField(controller: cittaController, decoration: InputDecoration(labelText: 'Città')),
               TextField(
@@ -267,6 +303,48 @@ Future<void> salvaPreventivo() async {
               ),
               SizedBox(height: 16),
               ElevatedButton(onPressed: () => showLavoroDialog(), child: Text('Aggiungi Lavoro')),
+              SizedBox(height: 16),
+            Text('Rate di Pagamento:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+            ListView.builder(
+              shrinkWrap: true,
+              physics: NeverScrollableScrollPhysics(),
+              itemCount: rateControllers.length,
+              itemBuilder: (context, index) {
+                return Card(
+                  margin: EdgeInsets.symmetric(vertical: 8),
+                  child: ListTile(
+                    title: TextField(
+                      controller: rateControllers[index]['descrizione'],
+                      decoration: InputDecoration(labelText: 'Descrizione Rata ${index + 1}'),
+                    ),
+                    subtitle: TextField(
+                      controller: rateControllers[index]['percentuale'],
+                      decoration: InputDecoration(labelText: 'Percentuale (%)'),
+                      keyboardType: TextInputType.numberWithOptions(decimal: true),
+                    ),
+                    trailing: IconButton(
+                      icon: Icon(Icons.delete, color: Colors.red),
+                      onPressed: () {
+                        setState(() {
+                          rateControllers.removeAt(index);
+                        });
+                      },
+                    ),
+                  ),
+                );
+              },
+            ),
+            ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  rateControllers.add({
+                    'descrizione': TextEditingController(),
+                    'percentuale': TextEditingController(),
+                  });
+                });
+              },
+              child: Text('Aggiungi Rata'),
+            ),
               SizedBox(height: 16),
               ElevatedButton(onPressed: salvaPreventivo, child: Text('Salva Preventivo')),
             ],
