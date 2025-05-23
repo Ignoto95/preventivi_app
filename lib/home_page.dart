@@ -5,11 +5,12 @@ import 'dart:convert';
 import 'modifica_preventivo_page.dart';
 import 'create_preventivo_page.dart' as createCompleto;
 import 'create_preventivo_from_cliente_page.dart' as createDaCliente;
-import 'package:url_launcher/url_launcher.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:open_file/open_file.dart';
-import 'dart:io';
+//import 'package:url_launcher/url_launcher.dart';
+//import 'package:path_provider/path_provider.dart';
+//import 'package:open_file/open_file.dart';
+//import 'dart:io';
 import 'services/pdf_service.dart';
+import 'services/delete_preventivo.dart';
 
 class HomePage extends StatefulWidget {
   @override
@@ -317,44 +318,16 @@ class _HomePageState extends State<HomePage> {
                                             }
                                           },
                                         ),
-                                        IconButton(
-                                          icon: Icon(Icons.delete, color: Colors.red),
-                                          onPressed: () async {
-                                            final shouldDelete = await showDialog<bool>(
-                                              context: context,
-                                              builder: (context) => AlertDialog(
-                                                title: Text('Conferma eliminazione'),
-                                                content: Text(
-                                                    'Sei sicuro di voler eliminare il preventivo #${preventivo["id_preventivo"]}?'),
-                                                actions: [
-                                                  TextButton(
-                                                    onPressed: () => Navigator.pop(context, false),
-                                                    child: Text('Annulla'),
-                                                  ),
-                                                  TextButton(
-                                                    onPressed: () => Navigator.pop(context, true),
-                                                    child: Text('Elimina'),
-                                                  ),
-                                                ],
-                                              ),
-                                            );
-
-                                            if (shouldDelete == true) {
-                                              final response = await http.delete(
-                                                Uri.parse('http://94.176.182.61:3000/preventivo/${preventivo["id_preventivo"]}'),
-                                              );
-
-                                              if (response.statusCode == 200) {
-                                                setState(() {
-                                                  clientiConPreventivi.forEach((cliente, preventivi) {
-                                                    preventivi.removeWhere(
-                                                        (p) => p["id_preventivo"] == preventivo["id_preventivo"]);
-                                                  });
-                                                });
-                                              }
-                                            }
-                                          },
-                                        ),
+                                      IconButton(
+                                        icon: Icon(Icons.delete, color: Colors.red),
+                                        onPressed: () async {
+                                          final deleted = await confermaECancellaPreventivo(context, preventivo["id_preventivo"]);
+                                      
+                                          if (deleted) {
+                                            fetchPreventivi();
+                                          }
+                                        },
+                                      ),
                                       ],
                                     ),
                                         );
