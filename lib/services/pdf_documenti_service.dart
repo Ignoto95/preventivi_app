@@ -3,8 +3,8 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'dart:html' as html; // Solo per Web
 
-class PdfService {
-  static Future<void> generateAndOpenPdf(
+class PdfServiceDocumento {
+  static Future<void> generateAndOpenPdfDocumento(
       int idPreventivo, Map<String, dynamic> datiPreventivo) async {
     final String url =
         'http://94.176.182.61:3000/generate-pdf/preventivo/$idPreventivo';

@@ -34,3 +34,25 @@ ER DB:
 1-Ogni Cliente può avere più Preventivi: Ogni cliente può ricevere più preventivi per diversi lavori.
 2-Ogni Preventivo può avere più Lavori: Ogni preventivo può contenere più lavori (tipi di lavoro).
 3-Il campo caldaia e data_caldaia si applicano a ciascun Lavoro. Se caldaia è TRUE, allora la data_caldaia deve essere valorizzata.
+
+
+27-05-2025 --> 
+Fatto il refactoring della componente db con questa struttura: 
+
+/backend
+│
+├── server.js                 # Entry point, configura app, middlewares e routes
+├── /routes                   # Tutte le route suddivise per risorsa
+│   ├── clientiRoutes.js
+│   ├── preventiviRoutes.js
+│   ├── lavoriRoutes.js
+│   └── pdfRoutes.js
+├── /controllers              # Logica delle funzioni chiamate dalle route
+│   ├── clientiController.js
+│   ├── preventiviController.js
+│   ├── lavoriController.js
+│   └── pdfController.js
+├── /db                       # Connessione al database
+│   └── connection.js
+└── /utils                    # Funzioni di supporto, ad es. generazione PDF
+    └── pdfGenerator.js
