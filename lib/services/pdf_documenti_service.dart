@@ -1,54 +1,25 @@
-import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:html' as html;
 import 'package:http/http.dart' as http;
-import 'dart:html' as html; // Solo per Web
 
-class PdfServiceDocumento {
-  static Future<void> generateAndOpenPdfDocumento(
-      int idPreventivo, Map<String, dynamic> datiPreventivo) async {
-    final String url =
-        'http://94.176.182.61:3000/generate-pdf/preventivo/$idPreventivo';
-
+class PdfDocumentoService {
+  static Future<void> generateDocumentoPdf(int idDocumento) async {
     try {
-      final response = await http.post(
-        Uri.parse(url),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode(datiPreventivo),
+      final response = await http.get(
+        Uri.parse('http://94.176.182.61:3000/documenti-conformita/pdf/$idDocumento'),
       );
 
       if (response.statusCode == 200) {
-        final Uint8List pdfBytes = response.bodyBytes;
-
-        // Crea un oggetto Blob per rappresentare il PDF nel browser
-        final blob = html.Blob([pdfBytes], 'application/pdf');
-
-        // Genera un URL temporaneo per il Blob
-        final blobUrl = html.Url.createObjectUrlFromBlob(blob);
-
-        // Crea un link invisibile per avviare il download del file
-       final nome = datiPreventivo['nome_cliente'] ?? 'Nome';
-      final cognome = datiPreventivo['cognome_cliente'] ?? 'Cognome';
-      final fileName = 'Preventivo.${nome}.${cognome}.pdf'
-          .replaceAll(' ', '_') // per sicurezza: spazi diventano underscore
-          .replaceAll(RegExp(r'[^\w\.]'), ''); // rimuove caratteri strani
-      
-      final anchor = html.AnchorElement(href: blobUrl)
-        ..setAttribute('download', fileName)
-        ..click();
-        // Libera la memoria associata all'URL temporaneo
-        html.Url.revokeObjectUrl(blobUrl);
+        final blob = html.Blob([response.bodyBytes], 'application/pdf');
+        final url = html.Url.createObjectUrlFromBlob(blob);
+        final anchor = html.AnchorElement(href: url)
+          ..setAttribute("download", "documento_$idDocumento.pdf")
+          ..click();
+        html.Url.revokeObjectUrl(url);
       } else {
-        final errorMessage =
-            'Errore nella generazione del PDF: ${response.statusCode}';
-        print(errorMessage);
-        throw Exception(errorMessage);
+        throw Exception('Errore ${response.statusCode}');
       }
     } catch (e) {
-      final errorMessage = 'Errore durante la richiesta PDF: $e';
-      print(errorMessage);
-      throw Exception(errorMessage);
+      throw Exception('Errore generazione PDF: $e');
     }
   }
 }

@@ -37,7 +37,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-
-  # Dichiarazione degli asset
   assets:
-    - assests\modello_preventivo_template.pdf
+    - assests/Logosimone.png

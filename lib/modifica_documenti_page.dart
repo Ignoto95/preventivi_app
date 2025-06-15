@@ -43,6 +43,16 @@
     bool certificatoRiconoscimento = false;
     bool attestazioneConformita = false;
 
+String formatDataString(String? isoString) {
+  if (isoString == null) return '';
+  try {
+    final date = DateTime.parse(isoString);
+    return "${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+  } catch (e) {
+    return isoString; // fallback se il parsing fallisce
+  }
+}
+
     @override
     void dispose() {
       _esecutriceController.dispose();
@@ -57,7 +67,8 @@
     print(widget.documento);
     _esecutriceController.text = (widget.documento['esecutrice_impianto'] as String?) ?? '';
     _applicabileController.text = (widget.documento['testo_norma_tecnica_impiego'] as String?) ?? '';
-    _dataDocumentoController.text = (widget.documento['data_documento'] as String?) ?? '';
+    final rawData = widget.documento['data_documento'] as String?;
+    _dataDocumentoController.text = rawData != null ? formatDataString(rawData) : '';
     tipoDocumento = (widget.documento['tipo_documento'] as String?) ?? 'Dichiarazione di Conformità';
 
     normaTecnica = (widget.documento['norma_tecnica_applicabile'] ?? 0) == 1;

@@ -1,12 +1,20 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:preventivi_app/services/dati_cliente_byid.dart';
 
 class ModificaPreventivoPage extends StatefulWidget {
   final Map<String, dynamic> preventivo;
-  
+    final String nome;
+    final String cognome;
+    final int idCliente;
 
-  ModificaPreventivoPage({required this.preventivo});
+  ModificaPreventivoPage({
+    required this.preventivo,
+    required this.nome,   
+    required this.cognome,
+    required this.idCliente,
+    });
 
   @override
   _ModificaPreventivoPageState createState() => _ModificaPreventivoPageState();
@@ -23,13 +31,45 @@ class _ModificaPreventivoPageState extends State<ModificaPreventivoPage> {
   late TextEditingController telefonoController;
   late TextEditingController codiceFiscaleController;
   late TextEditingController accontoController;
+  String? nome;
+  String? cognome;
+  bool isLoading = true;
+  String? error;
+  
   List<Map<String, TextEditingController>> rateControllers = [];
 
   List<Map<String, dynamic>> lavori = [];
 
+  String formatDataString(String? isoString) {
+  if (isoString == null) return '';
+  try {
+    final date = DateTime.parse(isoString);
+    return "${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}";
+  } catch (e) {
+    return isoString; // fallback se il parsing fallisce
+  }
+  }
+
+      Future<void> _loadClienteData() async {
+    try {
+      final clienteData = await fetchClienteById(widget.idCliente);
+      setState(() {
+        nome = clienteData['nome'] as String?;
+        cognome = clienteData['cognome'] as String?;
+        isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        error = e.toString();
+        isLoading = false;
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _loadClienteData();
   // Inizializza rateControllers con i dati presenti nel preventivo, se ci sono
   if (widget.preventivo["rate"] != null) {
     rateControllers = List<Map<String, TextEditingController>>.from(
@@ -53,7 +93,9 @@ class _ModificaPreventivoPageState extends State<ModificaPreventivoPage> {
     //prezzoTotaleController = TextEditingController(text: widget.preventivo["prezzo_totale"].toString());
     
     // Inizializza la data (se è presente nel preventivo)
-    dataPreventivoController = TextEditingController(text: widget.preventivo["data_preventivo"] ?? DateTime.now().toIso8601String().split('T')[0]);
+    dataPreventivoController = TextEditingController(
+      text: formatDataString(widget.preventivo["data_preventivo"]),
+    );
     emailController = TextEditingController(text: widget.preventivo["email"] ?? '');
     telefonoController = TextEditingController(text: widget.preventivo["telefono"] ?? '');
     codiceFiscaleController = TextEditingController(text: widget.preventivo["codice_fiscale"] ?? '');
@@ -90,6 +132,7 @@ class _ModificaPreventivoPageState extends State<ModificaPreventivoPage> {
       });
     }
   }
+
 
 Future<void> salvaPreventivo() async {
   final rate = rateControllers.map((rata) {
@@ -141,6 +184,14 @@ if (sommaPercentuali > 100) {
 
     if (response.statusCode == 200) {
       Navigator.pop(context, true); // Torna alla pagina precedente e aggiorna
+          ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Preventivo aggiornato con successo!'),
+            backgroundColor: Colors.green,
+          ),
+          );
+         await Future.delayed(Duration(seconds: 1));
+       Navigator.of(context).pop(true);
     } else {
       print('Errore durante l\'aggiornamento del preventivo. Codice: ${response.statusCode}');
       print('Risposta del server: ${response.body}');
@@ -218,7 +269,7 @@ if (sommaPercentuali > 100) {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Modifica Preventivo'),
+        title: Text('Modifica Preventivo per $nome $cognome '),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),

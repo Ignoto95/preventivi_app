@@ -7,7 +7,7 @@ class PdfService {
   static Future<void> generateAndOpenPdf(
       int idPreventivo, Map<String, dynamic> datiPreventivo) async {
     final String url =
-        'http://94.176.182.61:3000/generate-pdf/documenti/$idPreventivo';
+        'http://94.176.182.61:3000/generate-pdf/preventivo/$idPreventivo';
 
     try {
       final response = await http.post(
@@ -21,23 +21,19 @@ class PdfService {
       if (response.statusCode == 200) {
         final Uint8List pdfBytes = response.bodyBytes;
 
-        // Crea un oggetto Blob per rappresentare il PDF nel browser
         final blob = html.Blob([pdfBytes], 'application/pdf');
-
-        // Genera un URL temporaneo per il Blob
         final blobUrl = html.Url.createObjectUrlFromBlob(blob);
 
-        // Crea un link invisibile per avviare il download del file
-       final nome = datiPreventivo['nome_cliente'] ?? 'Nome';
-      final cognome = datiPreventivo['cognome_cliente'] ?? 'Cognome';
-      final fileName = 'Preventivo.${nome}.${cognome}.pdf'
-          .replaceAll(' ', '_') // per sicurezza: spazi diventano underscore
-          .replaceAll(RegExp(r'[^\w\.]'), ''); // rimuove caratteri strani
-      
-      final anchor = html.AnchorElement(href: blobUrl)
-        ..setAttribute('download', fileName)
-        ..click();
-        // Libera la memoria associata all'URL temporaneo
+        final nome = datiPreventivo['nome_cliente'] ?? 'Nome';
+        final cognome = datiPreventivo['cognome_cliente'] ?? 'Cognome';
+        final fileName = 'Preventivo.${nome}.${cognome}.pdf'
+            .replaceAll(' ', '_')
+            .replaceAll(RegExp(r'[^\w\.]'), '');
+
+        final anchor = html.AnchorElement(href: blobUrl)
+          ..setAttribute('download', fileName)
+          ..click();
+
         html.Url.revokeObjectUrl(blobUrl);
       } else {
         final errorMessage =
