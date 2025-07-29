@@ -3,11 +3,12 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart'; // Importa il file generato da flutterfire configure
 import 'login_page.dart';
 import 'home_page.dart';
-import 'nuovo_cliente_page.dart.dart';
+import 'nuovo_cliente_page.dart';
 import 'search_preventivo_page.dart';
 import 'package:path_provider/path_provider.dart';
 // import 'dart:io'; --> libreria non supportata lato web flutter
 import 'package:flutter/foundation.dart'; // Import per kIsWeb
+import 'main_home_page.dart';
 
 
 void main() async {
@@ -32,6 +33,7 @@ class MyApp extends StatelessWidget {
       initialRoute: '/',
       routes: {
         '/': (context) => LoginPage(),
+        '/mainHome': (context) => MainHomePage(),
         '/home': (context) => HomePage(),
         '/create': (context) => NuovoClientePage(),
         '/search': (context) => SearchPreventivoPage(),

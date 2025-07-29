@@ -5,7 +5,7 @@ class PdfDocumentoService {
   static Future<void> generateDocumentoPdf(int idDocumento) async {
     try {
       final response = await http.get(
-        Uri.parse('http://94.176.182.61:3000/documenti-conformita/pdf/$idDocumento'),
+        Uri.parse('http://94.176.182.61:3000/documenti/pdf/$idDocumento'),
       );
 
       if (response.statusCode == 200) {
