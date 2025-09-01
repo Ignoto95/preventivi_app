@@ -1,6 +1,8 @@
-import 'package:http/http.dart' as http;
+//import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'services/api_client.dart';
+import 'services/auth_service.dart';
 
 class CreateDocumentoFromClientePage extends StatefulWidget {
   final String nome;
@@ -73,13 +75,17 @@ class _CreateDocumentoFromClientePageState extends State<CreateDocumentoFromClie
   }
 
 Future<void> _salvaDocumento() async {
+  if (!mounted) return;
+  
   if (_dataDocumentoController.text.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Inserire la data del documento è obbligatorio'),
-        backgroundColor: Colors.red,
-      ),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Inserire la data del documento è obbligatorio'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
     return;
   }
 
@@ -123,34 +129,40 @@ Future<void> _salvaDocumento() async {
           };
 
     try {
+      // Verifica permessi admin
+      final isAdmin = await AuthService().isAdmin();
+      if (!isAdmin) {
+        throw Exception('Solo gli admin possono salvare documenti');
+      }
+
       final endpoint = tipoDocumento == 'Dichiarazione di Conformità'
           ? 'documenti-conformita'
           : 'documenti-rispondenza';
           
-      final response = await http.post(
-        Uri.parse('http://94.176.182.61:3000/$endpoint'),
-        headers: {'Content-Type': 'application/json'},
+      final response = await ApiClient().post(
+        endpoint,
         body: json.encode(documento),
       );
+
       final responseData = json.decode(response.body);
       debugPrint('Risposta backend: $responseData');
+      
       if (response.statusCode == 201) {
         if (!mounted) return;
         
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: Text(responseData['message'] ?? 'Documento salvato con successo!'),
-      backgroundColor: Colors.green,
-    ),
-  );
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(responseData['message'] ?? 'Documento salvato con successo!'),
+            backgroundColor: Colors.green,
+          ),
+        );
         
-        // Attendi che lo SnackBar sia visibile prima di navigare
         await Future.delayed(const Duration(milliseconds: 500));
         
         if (!mounted) return;
         Navigator.of(context).pop(true);
       } else {
-         throw Exception(responseData['error'] ?? 'Errore sconosciuto');
+        throw Exception(responseData['error'] ?? 'Errore sconosciuto');
       }
     } catch (e) {
       if (!mounted) return;

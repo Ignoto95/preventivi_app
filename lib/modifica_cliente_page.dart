@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+//import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'services/api_client.dart';
+import 'services/auth_service.dart';
 
 class ModificaClientePage extends StatefulWidget {
   final Map<String, dynamic> cliente;
@@ -47,49 +49,60 @@ class _ModificaClientePageState extends State<ModificaClientePage> {
     super.dispose();
   }
 
-  Future<void> _salvaModifiche() async {
-    if (!_formKey.currentState!.validate()) return;
+Future<void> _salvaModifiche() async {
+  if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isLoading = true);
+  setState(() => _isLoading = true);
 
-    try {
-      final response = await http.put(
-        Uri.parse('http://94.176.182.61:3000/clienti/${widget.cliente['id_cliente']}'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'nome': _nomeController.text,
-          'cognome': _cognomeController.text,
-          'citta': _cittaController.text,
-          'via': _viaController.text,
-          'email': _emailController.text,
-          'telefono': _telefonoController.text,
-          'codice_fiscale': _codiceFiscaleController.text,
-        }),
-      );
+  try {
+    // Verifica se l'utente è admin
+    final isAdmin = await AuthService().isAdmin();
+    if (!isAdmin) {
+      throw Exception('Solo gli admin possono modificare i clienti');
+    }
 
-      if (response.statusCode == 200) {
+    final response = await ApiClient().put(
+      'clienti/${widget.cliente['id_cliente']}',
+      body: json.encode({
+        'nome': _nomeController.text,
+        'cognome': _cognomeController.text,
+        'citta': _cittaController.text,
+        'via': _viaController.text,
+        'email': _emailController.text,
+        'telefono': _telefonoController.text,
+        'codice_fiscale': _codiceFiscaleController.text,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+          const SnackBar(
             content: Text('Cliente aggiornato con successo'),
             backgroundColor: Colors.green,
           ),
         );
-        await Future.delayed(Duration(seconds: 1));
+        await Future.delayed(const Duration(seconds: 1));
         Navigator.pop(context, true);
-      } else {
-        throw Exception('Errore durante l\'aggiornamento');
       }
-    } catch (e) {
+    } else {
+      throw Exception('Errore durante l\'aggiornamento: ${response.body}');
+    }
+  } catch (e) {
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Errore: ${e.toString()}'),
           backgroundColor: Colors.red,
         ),
       );
-    } finally {
+    }
+  } finally {
+    if (mounted) {
       setState(() => _isLoading = false);
     }
   }
+}
 
   @override
   Widget build(BuildContext context) {

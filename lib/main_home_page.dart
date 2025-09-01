@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'home_page.dart'; // Pagina che diventerà "Rubrica clienti"
-import 'login_page.dart'; 
+//import 'login_page.dart'; 
 //import 'package:firebase_auth/firebase_auth.dart';
 import 'lista_richieste.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'revisioni_caldaie_page.dart';
+import 'package:preventivi_app/services/api_client.dart';
+import 'package:preventivi_app/services/auth_service.dart';
 
 
 class MainHomePage extends StatefulWidget {
@@ -17,45 +19,52 @@ class MainHomePage extends StatefulWidget {
 class _MainHomePageState extends State<MainHomePage> {
   int _selectedIndex = 0;
   User? currentUser;
+  final ApiClient _apiClient = ApiClient();
+  final AuthService _authService = AuthService();
 
-  Future<Map<String, dynamic>> fetchStatistiche() async {
-    try {
-      final response = await http.get(Uri.parse('http://94.176.182.61:3000/statistiche'));
+Future<Map<String, dynamic>> fetchStatistiche() async {
+  try {
+    final response = await _apiClient.get('statistiche');
 
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        return {
-          'totaleClienti': data['totaleClienti'] ?? 0,
-          'preventiviPerAnno': data['preventiviPerAnno'] ?? [],
-          'totaleCondizionatori': data['totaleCondizionatori'] ?? 0,
-          'condizionatoriScadenza': data['condizionatoriScadenza'] ?? {
-            'scadute': 0,
-            'in_scadenza_30gg': 0,
-            'in_scadenza_90gg': 0,
-            'non_scadute': 0
-          },
-        };
-      } else {
-        throw Exception('Errore nel recupero delle statistiche');
+    if (response.statusCode == 200) {
+      return json.decode(response.body);
+    } else if (response.statusCode == 401) {
+      await _authService.signOut();
+      if (mounted) {
+        Navigator.pushReplacementNamed(context, '/login');
       }
-    } catch (e) {
-      return {
-        'totaleClienti': 0,
-        'preventiviPerAnno': [],
-        'totaleCondizionatori': 0,
-        'condizionatoriScadenza': {
-          'scadute': 0,
-          'in_scadenza_30gg': 0,
-          'in_scadenza_90gg': 0,
-          'non_scadute': 0
-        },
-      };
+      throw Exception('Sessione scaduta');
+    } else {
+      throw Exception('Errore ${response.statusCode}: ${response.body}');
     }
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Errore nel caricamento delle statistiche: ${e.toString()}')),
+      );
+    }
+    return {
+      'totaleClienti': 0,
+      'preventiviPerAnno': [],
+      'totaleCondizionatori': 0,
+      'condizionatoriScadenza': {
+        'scadute': 0,
+        'in_scadenza_30gg': 0,
+        'in_scadenza_90gg': 0,
+        'non_scadute': 0
+      },
+    };
   }
+}
   @override
   void initState() {
     super.initState();
     currentUser = FirebaseAuth.instance.currentUser;
+      if (!_authService.isAuthenticated()) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Navigator.pushReplacementNamed(context, '/login');
+    });
+  }
   }
 
   @override
@@ -153,8 +162,18 @@ Widget _buildDrawer(BuildContext context) {
           leading: Icon(Icons.logout),
           title: Text('Logout'),
           onTap: () async {
-            await FirebaseAuth.instance.signOut();
-            Navigator.pushReplacementNamed(context, '/login');
+            try {
+              await _authService.signOut();
+              if (mounted) {
+                Navigator.pushReplacementNamed(context, '/login');
+              }
+            } catch (e) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Errore durante il logout: ${e.toString()}')),
+                );
+              }
+            }
           },
         ),
       ],
@@ -199,63 +218,78 @@ Widget _buildWelcomePage() {
                 ),
                 const SizedBox(height: 40),
                 
-                // Statistiche Clienti
-                _buildStatCard(
-                  icon: Icons.people,
-                  title: 'Clienti',
-                  value: '$totaleClienti',
-                ),
-                
-                const SizedBox(height: 20),
-                
-                // Statistiche Caldaie
-                _buildStatCard(
-                  icon: Icons.ac_unit,
-                  title: 'Caldaie totali',
-                  value: '$totaleCondizionatori',
-                ),
-                
-                const SizedBox(height: 20),
-                
-                // Stato revisioni caldaie
-                Card(
-                  margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Column(
-                      children: [
-                        Text(
-                          'Stato Revisioni Caldaie',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.blue.shade800,
+                // Riga con statistiche e stato revisioni
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Colonna sinistra con le statistiche
+                    Expanded(
+                      child: Column(
+                        children: [
+                          // Statistiche Clienti
+                          _buildStatCard(
+                            icon: Icons.people,
+                            title: 'Clienti',
+                            value: '$totaleClienti',
+                          ),
+                          
+                          const SizedBox(height: 20),
+                          
+                          // Statistiche Condizionatori
+                          _buildStatCard(
+                            icon: Icons.ac_unit,
+                            title: 'Condizionatori totali',
+                            value: '$totaleCondizionatori',
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    const SizedBox(width: 20),
+                    
+                    // Colonna destra con lo stato revisioni
+                    Expanded(
+                      child: Card(
+                        margin: EdgeInsets.zero,
+                        child: Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Column(
+                            children: [
+                              Text(
+                                'Stato Revisioni Condizionatori',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.blue.shade800,
+                                ),
+                              ),
+                              SizedBox(height: 12),
+                              _buildScadenzaRow(
+                                'Scadute',
+                                scadenze['scadute'].toString(),
+                                Colors.red,
+                              ),
+                              _buildScadenzaRow(
+                                'In scadenza (30 giorni)',
+                                scadenze['in_scadenza_30gg'].toString(),
+                                Colors.orange,
+                              ),
+                              _buildScadenzaRow(
+                                'In scadenza (90 giorni)',
+                                scadenze['in_scadenza_90gg'].toString(),
+                                Colors.amber,
+                              ),
+                              _buildScadenzaRow(
+                                'Non scadute',
+                                scadenze['non_scadute'].toString(),
+                                Colors.green,
+                              ),
+                            ],
                           ),
                         ),
-                        SizedBox(height: 12),
-                        _buildScadenzaRow(
-                          'Scadute',
-                          scadenze['scadute'].toString(),
-                          Colors.red,
-                        ),
-                        _buildScadenzaRow(
-                          'In scadenza (30 giorni)',
-                          scadenze['in_scadenza_30gg'].toString(),
-                          Colors.orange,
-                        ),
-                        _buildScadenzaRow(
-                          'In scadenza (90 giorni)',
-                          scadenze['in_scadenza_90gg'].toString(),
-                          Colors.amber,
-                        ),
-                        _buildScadenzaRow(
-                          'Non scadute',
-                          scadenze['non_scadute'].toString(),
-                          Colors.green,
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
+                  ],
                 ),
                 
                 const SizedBox(height: 20),
@@ -332,7 +366,32 @@ Widget _buildStatCard({required IconData icon, required String title, required S
 }
 
 Widget _buildScadenzaRow(String label, String value, Color color) {
-  return Padding(
+  // Icona per ogni tipo di scadenza
+  IconData? icon;
+  String shortLabel = label;
+  
+  if (MediaQuery.of(context).size.width < 600) {
+    switch (label) {
+      case 'Scadute':
+        icon = Icons.error_outline;
+        shortLabel = 'Scadute';
+        break;
+      case 'In scadenza (30 giorni)':
+        icon = Icons.warning_amber;
+        shortLabel = '30gg';
+        break;
+      case 'In scadenza (90 giorni)':
+        icon = Icons.info_outline;
+        shortLabel = '90gg';
+        break;
+      case 'Non scadute':
+        icon = Icons.check_circle_outline;
+        shortLabel = 'Ok';
+        break;
+    }
+  }
+
+  return Padding( 
     padding: EdgeInsets.symmetric(vertical: 6),
     child: Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -348,11 +407,13 @@ Widget _buildScadenzaRow(String label, String value, Color color) {
               ),
             ),
             SizedBox(width: 8),
-            Text(label),
+            if (icon != null) Icon(icon, size: 18, color: color),
+            if (icon != null) SizedBox(width: 4),
+            Text(shortLabel),
           ],
         ),
         Text(
-          value ?? '0', // Aggiunto controllo per valore nullo
+          value,
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
       ],

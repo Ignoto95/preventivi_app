@@ -6,7 +6,11 @@ import 'services/pdf_documenti_service.dart';
 import 'modifica_documenti_page.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-
+import 'services/api_client.dart';
+import 'services/auth_service.dart';
+import 'dart:html' as html; // Solo per web
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:url_launcher/url_launcher.dart';
 class DettaglioDocumentoPage extends StatefulWidget {
   final Map<String, dynamic> documento;
 
@@ -32,28 +36,60 @@ class _DettaglioDocumentoPageState extends State<DettaglioDocumentoPage> {
     _checkAllegati();
   }
 
-  Future<void> _checkAllegati() async {
-    setState(() => _isLoading = true);
-    try {
-      final tipoDocumento = _getTipoDocumentoBackend();
-      final response = await http.get(
-        Uri.parse('http://94.176.182.61:3000/$tipoDocumento/${widget.documento["id_documento"]}/allegati'),
-      );
+Future<void> _checkAllegati() async {
+  print('🔍 Inizio check allegati');
+  
+  if (!mounted) return;
+  setState(() => _isLoading = true);
+  
+  try {
+    final isAdmin = await AuthService().isAdmin();
+    print('🔐 Is admin per check: $isAdmin');
+
+    final tipoDocumento = _getTipoDocumentoBackend();
+    print('🌐 URL chiamata: $tipoDocumento/${widget.documento["id_documento"]}/allegati');
+    
+    final response = await ApiClient().get(
+      '$tipoDocumento/${widget.documento["id_documento"]}/allegati',
+    );
+    
+    //print('📨 Risposta check: ${response.statusCode} - ${response.body}');
+    
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      //print('📊 Dati ricevuti: $data');
       
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+      if (mounted) {
         setState(() {
           widget.documento['has_modulo_a12'] = data['has_modulo_a12'] ?? false;
           widget.documento['has_relazione_materiali'] = data['has_relazione_materiali'] ?? false;
           widget.documento['has_relazione_verifica'] = data['has_relazione_verifica'] ?? false;
         });
+        
+        print('🔄 Stato aggiornato:');
+        print('   - Modulo A12: ${widget.documento['has_modulo_a12']}');
+        print('   - Relazione Materiali: ${widget.documento['has_relazione_materiali']}');
+        print('   - Relazione Verifica: ${widget.documento['has_relazione_verifica']}');
       }
-    } catch (e) {
-      _showErrorSnackbar('Errore durante il recupero degli allegati: $e');
-    } finally {
-      setState(() => _isLoading = false);
+    } else {
+      print('❌ Errore HTTP: ${response.statusCode}');
+      throw Exception('Errore ${response.statusCode}: ${response.body}');
     }
+  } catch (e) {
+    print('❌ Errore durante check: $e');
+    if (mounted && ScaffoldMessenger.of(context).mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Errore durante il recupero degli allegati: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  } finally {
+    print('🏁 Fine check allegati');
+    if (mounted) setState(() => _isLoading = false);
   }
+}
 
   String _getTipoDocumentoBackend() {
     switch(widget.documento["tipo_documento"].toLowerCase()) {
@@ -208,7 +244,7 @@ Widget _buildDocumentHeader(BuildContext context) {
         'color': Colors.orange,
       },
       {
-        'tipo': 'Relazione Verifica',
+        'tipo': 'Relazione Verifica', 
         'presente': widget.documento['has_relazione_verifica'] ?? false,
         'icon': Icons.verified,
         'color': Colors.green,
@@ -394,67 +430,119 @@ Widget _buildDocumentHeader(BuildContext context) {
     );
   }
 
-  Future<void> _downloadModelloVuoto(String tipoAllegato, BuildContext context) async {
-    try {
-      final backendType = _allegatoToBackendType[tipoAllegato];
-      if (backendType == null) throw Exception('Tipo allegato non supportato');
+Future<void> _downloadModelloVuoto(String tipoAllegato, BuildContext context) async {
+  try {
+    final isAdmin = await AuthService().isAdmin();
+    if (!isAdmin) throw Exception('Solo gli admin possono scaricare modelli vuoti');
 
-      final url = Uri.parse('http://94.176.182.61:3000/modello-vuoto/$backendType');
-      if (!await launchUrl(url)) throw Exception('Impossibile avviare il download');
-    } catch (e) {
-      _showErrorSnackbar('Errore download: ${e.toString()}');
-    }
-  }
+    final backendType = _allegatoToBackendType[tipoAllegato];
+    if (backendType == null) throw Exception('Tipo allegato non supportato');
 
-  Future<void> _uploadDocumentoCompilato(String tipoAllegato, BuildContext context) async {
-    try {
-      final backendType = _allegatoToBackendType[tipoAllegato];
-      if (backendType == null) throw Exception('Tipo allegato non supportato');
+    final nomeCliente = widget.documento["nome_cliente"]?.toString() ?? '';
+    final cognomeCliente = widget.documento["cognome_cliente"]?.toString() ?? '';
 
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['pdf'],
+    // MODIFICA: Usa ApiClient per costruire l'URL
+    final url = await ApiClient().buildFullUrl(
+      'modello-vuoto/$backendType?nome=${Uri.encodeComponent(nomeCliente)}&cognome=${Uri.encodeComponent(cognomeCliente)}'
+    );
+
+    // Soluzione specifica per web
+    final anchor = html.AnchorElement(href: url)
+      ..setAttribute('download', '')
+      ..click();
+
+    if (mounted && ScaffoldMessenger.of(context).mounted){
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Download del modello avviato')),
       );
-
-      if (result != null && result.files.isNotEmpty) {
-        setState(() => _isUploading = true);
-        
-        final file = result.files.first;
-        final tipoDocumento = _getTipoDocumentoBackend();
-        final url = Uri.parse('http://94.176.182.61:3000/$tipoDocumento/${widget.documento["id_documento"]}/upload');
-        
-        var request = http.MultipartRequest('POST', url);
-        request.fields['tipo_allegato'] = backendType;
-        
-        if (kIsWeb) {
-          request.files.add(http.MultipartFile.fromBytes(
-            'documento',
-            file.bytes!,
-            filename: file.name,
-          ));
-        } else {
-          request.files.add(await http.MultipartFile.fromPath(
-            'documento',
-            file.path!,
-            filename: file.name,
-          ));
-        }
-
-        final response = await request.send();
-        
-        if (response.statusCode == 200) {
-          _showSuccessSnackbar('Documento caricato con successo!');
-          await _checkAllegati(); // Refresh allegati
-        } else {
-          throw Exception('Errore durante il caricamento: ${response.statusCode}');
-        }
-      }
-    } catch (e) {
-      _showErrorSnackbar('Errore: ${e.toString()}');
-    } finally {
-      setState(() => _isUploading = false);
+    }
+  } catch (e) {
+    if (mounted && ScaffoldMessenger.of(context).mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Errore download: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
+}
+
+Future<void> _uploadDocumentoCompilato(String tipoAllegato, BuildContext context) async {
+  print('⏳ Inizio upload per: $tipoAllegato');
+  
+  try {
+    final isAdmin = await AuthService().isAdmin();
+    if (!isAdmin) throw Exception('Solo gli admin possono caricare documenti');
+
+    final backendType = _allegatoToBackendType[tipoAllegato];
+    if (backendType == null) throw Exception('Tipo allegato non supportato');
+
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['pdf'],
+    );
+
+    if (result != null && result.files.isNotEmpty) {
+      _showLoadingDialog('Caricamento file in corso...');
+      
+      final file = result.files.first;
+      final tipoDocumento = _getTipoDocumentoBackend();
+
+      final response = await ApiClient().uploadMultipart(
+        '$tipoDocumento/${widget.documento["id_documento"]}/upload',
+        file.bytes!,
+        file.name,
+        fieldName: 'documento',
+        fields: {'tipo_allegato': backendType},
+      );
+      
+      print('📨 Risposta server: ${response.statusCode} - ${response.body}');
+      
+      if (response.statusCode == 200) {
+        print('✅ Upload completato con successo');
+        
+        if (mounted) {
+          setState(() {
+            switch (backendType) {
+              case 'modulo_a12':
+                widget.documento['has_modulo_a12'] = true;
+                break;
+              case 'relazione_materiali':
+                widget.documento['has_relazione_materiali'] = true;
+                break;
+              case 'relazione_verifica':
+                widget.documento['has_relazione_verifica'] = true;
+                break;
+            }
+          });
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Documento caricato con successo!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      } else {
+        throw Exception('Errore durante il caricamento: ${response.statusCode} - ${response.body}');
+      }
+    }
+  } catch (e) {
+    print('❌ Errore durante upload: $e');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Errore: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  } finally {
+    print('🏁 Fine procedura upload');
+    _hideLoadingDialog();
+  }
+}
 
   Future<void> _modificaDocumento(BuildContext context) async {
     final aggiornato = await Navigator.push<bool>(
@@ -473,122 +561,190 @@ Widget _buildDocumentHeader(BuildContext context) {
     }
   }
 
-  Future<void> _generaPdf(BuildContext context) async {
+Future<void> _generaPdf(BuildContext context) async {
+  _showLoadingDialog('Generazione PDF in corso...');
+  
+  try {
+    await PdfDocumentoService.generateDocumentoPdf(
+      widget.documento["id_documento"],
+      widget.documento["nome_cliente"] ?? '',
+      widget.documento["cognome_cliente"] ?? '',
+      widget.documento["tipo_documento"] ?? 'Conformità',
+    );
+    //_showSuccessSnackbar('PDF generato con successo');
+  } catch (e) {
+    _showErrorSnackbar('Errore generazione PDF: $e');
+  } finally {
+    _hideLoadingDialog();
+  }
+}
+
+Future<void> _confermaEliminazione(BuildContext context) async {
+  final conferma = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text("Conferma eliminazione"),
+      content: const Text("Eliminare definitivamente il DOCUMENTO e TUTTI gli ALLEGATI?"),
+      actions: [
+        TextButton(
+          child: const Text("Annulla"), 
+          onPressed: () => Navigator.pop(context, false),
+        ),
+        ElevatedButton(
+          child: const Text("Conferma"),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
+    ),
+  );
+  
+  if (conferma == true) {
+    _showLoadingDialog('Eliminazione in corso...');
+    
     try {
-      setState(() => _isLoading = true);
-      await PdfDocumentoService.generateDocumentoPdf(widget.documento["id_documento"]);
-      _showSuccessSnackbar('PDF generato con successo');
+      final isAdmin = await AuthService().isAdmin();
+      if (!isAdmin) throw Exception('Solo gli admin possono eliminare documenti');
+
+      final tipoDoc = widget.documento["tipo_documento"].toString().toLowerCase();
+      final tipo = tipoDoc.contains('conform') ? 'conformita' : 
+                   tipoDoc.contains('rispondenza') ? 'rispondenza' : 
+                   throw Exception('Tipo documento non supportato: $tipoDoc');
+              
+      final response = await ApiClient().delete(
+        "documenti/$tipo/${widget.documento["id_documento"]}",
+      );
+      
+      if (response.statusCode == 200) {
+        if (!mounted) return;
+        Navigator.pop(context, true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Documento eliminato con successo'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        throw Exception('Errore ${response.statusCode}: ${response.body}');
+      }
     } catch (e) {
-      _showErrorSnackbar('Errore generazione PDF: $e');
+      if (mounted && ScaffoldMessenger.of(context).mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Errore eliminazione: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      _hideLoadingDialog();
     }
   }
+}
 
-  Future<void> _confermaEliminazione(BuildContext context) async {
-    final conferma = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Conferma eliminazione"),
-        content: const Text("Eliminare definitivamente il DOCUMENTO e TUTTI gli ALLEGATI?"),
-        actions: [
-          TextButton(
-            child: const Text("Annulla"), 
-            onPressed: () => Navigator.pop(context, false),
-          ),
-          ElevatedButton(
-            child: const Text("Conferma"),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(context, true),
-          ),
-        ],
-      ),
+Future<void> _scaricaAllegato(String tipoAllegato, BuildContext context) async {
+  _showLoadingDialog('Download in corso...');
+  
+  try {
+    final isAdmin = await AuthService().isAdmin();
+    if (!isAdmin) throw Exception('Solo gli admin possono scaricare allegati');
+
+    final backendType = _allegatoToBackendType[tipoAllegato];
+    if (backendType == null) throw Exception('Tipo allegato non supportato');
+
+    final tipoDocumento = _getTipoDocumentoBackend();
+
+    final fullUrl = await ApiClient().buildFullUrl(
+      '$tipoDocumento/${widget.documento["id_documento"]}/download/$backendType'
     );
     
-    if (conferma == true) {
-      try {
-        setState(() => _isLoading = true);
-        final tipoDoc = widget.documento["tipo_documento"].toString().toLowerCase();
-        final tipo = tipoDoc.contains('conform') ? 'conformita' : 
-                     tipoDoc.contains('rispondenza') ? 'rispondenza' : 
-                     throw Exception('Tipo documento non supportato: $tipoDoc');
-                
-        final response = await http.delete(
-          Uri.parse("http://94.176.182.61:3000/documenti/$tipo/${widget.documento["id_documento"]}"),
-        );
-        
-        if (response.statusCode == 200 && mounted) {
-          Navigator.pop(context, true);
-          _showSuccessSnackbar('Documento eliminato con successo');
-        } else {
-          throw Exception('Errore ${response.statusCode}: ${response.body}');
-        }
-      } catch (e) {
-        _showErrorSnackbar('Errore eliminazione: ${e.toString()}');
-      } finally {
-        if (mounted) setState(() => _isLoading = false);
-      }
-    }
-  }
+    final anchor = html.AnchorElement(href: fullUrl)
+      ..setAttribute('download', '')
+      ..click();
 
-  Future<void> _scaricaAllegato(String tipoAllegato, BuildContext context) async {
+    /*if (mounted && ScaffoldMessenger.of(context).mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Download ${_getAllegatoDisplayName(tipoAllegato)} avviato'),
+          backgroundColor: Colors.green,
+        ),
+      );}*/
+    
+  } catch (e) {
+    if (mounted && ScaffoldMessenger.of(context).mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Errore download: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  } finally {
+    _hideLoadingDialog();
+  }
+}
+Future<void> _confermaEliminaAllegato(String tipoAllegato, BuildContext context) async {
+  final conferma = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text("Conferma eliminazione"),
+      content: Text("Eliminare l'allegato ${_getAllegatoDisplayName(tipoAllegato)}?"),
+      actions: [
+        TextButton(
+          child: const Text("Annulla"), 
+          onPressed: () => Navigator.pop(context, false),
+        ),
+        ElevatedButton(
+          child: const Text("Conferma"),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+          onPressed: () => Navigator.pop(context, true),
+        ),
+      ],
+    ),
+  );
+  
+  if (conferma == true) {
+    _showLoadingDialog('Eliminazione allegato...');
+    
     try {
+      final isAdmin = await AuthService().isAdmin();
+      if (!isAdmin) throw Exception('Solo gli admin possono eliminare allegati');
+
       final backendType = _allegatoToBackendType[tipoAllegato];
       if (backendType == null) throw Exception('Tipo allegato non supportato');
 
       final tipoDocumento = _getTipoDocumentoBackend();
-      final url = Uri.parse('http://94.176.182.61:3000/$tipoDocumento/${widget.documento["id_documento"]}/download/$backendType');
+      final response = await ApiClient().delete(
+        '$tipoDocumento/${widget.documento["id_documento"]}/delete-allegato/$backendType',
+      );
       
-      if (!await launchUrl(url)) throw Exception('Impossibile avviare il download');
-    } catch (e) {
-      _showErrorSnackbar('Errore download: ${e.toString()}');
-    }
-  }
-
-  Future<void> _confermaEliminaAllegato(String tipoAllegato, BuildContext context) async {
-    final conferma = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text("Conferma eliminazione"),
-        content: Text("Eliminare l'allegato ${_getAllegatoDisplayName(tipoAllegato)}?"),
-        actions: [
-          TextButton(
-            child: const Text("Annulla"), 
-            onPressed: () => Navigator.pop(context, false),
-          ),
-          ElevatedButton(
-            child: const Text("Conferma"),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () => Navigator.pop(context, true),
-          ),
-        ],
-      ),
-    );
-    
-    if (conferma == true) {
-      try {
-        setState(() => _isLoading = true);
-        final backendType = _allegatoToBackendType[tipoAllegato];
-        if (backendType == null) throw Exception('Tipo allegato non supportato');
-
-        final tipoDocumento = _getTipoDocumentoBackend();
-        final url = Uri.parse('http://94.176.182.61:3000/$tipoDocumento/${widget.documento["id_documento"]}/delete-allegato/$backendType');
-        
-        final response = await http.delete(url);
-        
-        if (response.statusCode == 200) {
-          _showSuccessSnackbar('${_getAllegatoDisplayName(tipoAllegato)} eliminato con successo');
+      if (response.statusCode == 200) {
+        if (mounted && ScaffoldMessenger.of(context).mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${_getAllegatoDisplayName(tipoAllegato)} eliminato con successo'),
+              backgroundColor: Colors.green,
+            ),
+          );
           await _checkAllegati(); // Refresh allegati
-        } else {
-          throw Exception('Errore durante l\'eliminazione: ${response.statusCode}');
         }
-      } catch (e) {
-        _showErrorSnackbar('Errore durante l\'eliminazione: ${e.toString()}');
-      } finally {
-        if (mounted) setState(() => _isLoading = false);
+      } else {
+        throw Exception('Errore durante l\'eliminazione: ${response.statusCode}');
       }
+    } catch (e) {
+      if (mounted && ScaffoldMessenger.of(context).mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Errore durante l\'eliminazione: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      _hideLoadingDialog();
     }
   }
+}
 
   void _showSuccessSnackbar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -613,4 +769,40 @@ Widget _buildDocumentHeader(BuildContext context) {
     final parsed = DateTime.tryParse(rawDate.toString());
     return parsed?.toIso8601String().substring(0, 10) ?? 'N/A';
   }
+
+  void _showLoadingDialog(String message) {
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (BuildContext context) {
+      return Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: Center(
+          child: Container(
+            padding: EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+                ),
+                SizedBox(height: 16),
+                Text(message),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
+void _hideLoadingDialog() {
+  Navigator.of(context, rootNavigator: true).pop();
+}
 }

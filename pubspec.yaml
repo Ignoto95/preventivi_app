@@ -20,6 +20,7 @@ dependencies:
   js: ^0.6.3
   url_launcher: ^6.2.4
   open_file: ^3.2.1
+  google_sign_in: ^6.1.5
 
   # Per le richieste HTTP al server
   http: any

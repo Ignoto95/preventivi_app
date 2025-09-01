@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http; 
+//import 'package:http/http.dart' as http; 
 import 'services/pdf_preventivi_service.dart';
 import 'services/delete_preventivo.dart';
 import 'dart:convert';
@@ -13,7 +13,8 @@ import 'revisioni_caldaie_page.dart';
 import 'lista_richieste.dart';
 import 'main_home_page.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '';
+import 'services/api_client.dart';
+import 'services/auth_service.dart';
 
 class HomePage extends StatefulWidget {
   @override
@@ -29,6 +30,7 @@ class _HomePageState extends State<HomePage> {
   String? filtroGiorno;
   bool isLoading = true;
   User? currentUser;
+  
 
   @override
   void initState() {
@@ -37,59 +39,66 @@ class _HomePageState extends State<HomePage> {
     currentUser = FirebaseAuth.instance.currentUser;
   }
 
-  Future<void> fetchPreventivi() async {
-    setState(() => isLoading = true);
-    
-    try {
-      final response = await http.get(Uri.parse('http://94.176.182.61:3000/clienti'));
-      
-      if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
-        Map<String, List<Map<String, dynamic>>> clienti = {};
+Future<void> fetchPreventivi() async {
+  setState(() => isLoading = true);
+  
+  try {
+    // Verifica se l'utente è admin
+    final isAdmin = await AuthService().isAdmin();
+    if (!isAdmin) {
+      throw Exception('Accesso negato: solo gli admin possono accedere');
+    }
 
-        for (var cliente in data) {
-          final clienteKey = "${cliente["nome"]} ${cliente["cognome"]}";
-          final List<dynamic> preventivi = cliente["preventivi"] ?? [];
-          
-          final Map<String, dynamic> clienteInfo = {
-            'nome': cliente["nome"],
-            'cognome': cliente["cognome"],
+    final response = await ApiClient().get('clienti');
+    
+    if (response.statusCode == 200) {
+      final List<dynamic> data = json.decode(response.body);
+      Map<String, List<Map<String, dynamic>>> clienti = {};
+
+      for (var cliente in data) {
+        final clienteKey = "${cliente["nome"]} ${cliente["cognome"]}";
+        final List<dynamic> preventivi = cliente["preventivi"] ?? [];
+        
+        final Map<String, dynamic> clienteInfo = {
+          'nome': cliente["nome"],
+          'cognome': cliente["cognome"],
+          'citta': cliente["citta"],
+          'via': cliente["via"],
+          'email': cliente["email"],
+          'telefono': cliente["telefono"],
+          'codice_fiscale': cliente["codice_fiscale"],
+          'id_cliente': cliente["id_cliente"],
+          'has_preventivi': preventivi.isNotEmpty,
+          'preventivi': preventivi.map<Map<String, dynamic>>((p) => {
+            'id_preventivo': p["id_preventivo"],
+            'data_preventivo': p["data_preventivo"],
+            'prezzo_totale': p["prezzo_totale"],
+            'nome_cliente': cliente["nome"],
+            'cognome_cliente': cliente["cognome"],
+            'email': cliente["email"],
+            'id_cliente': cliente["id_cliente"],
+            'telefono': cliente["telefono"],
             'citta': cliente["citta"],
             'via': cliente["via"],
-            'email': cliente["email"],
-            'telefono': cliente["telefono"],
             'codice_fiscale': cliente["codice_fiscale"],
-            'id_cliente': cliente["id_cliente"],
-            'has_preventivi': preventivi.isNotEmpty,
-            'preventivi': preventivi.map<Map<String, dynamic>>((p) => {
-              'id_preventivo': p["id_preventivo"],
-              'data_preventivo': p["data_preventivo"],
-              'prezzo_totale': p["prezzo_totale"],
-              'nome_cliente': cliente["nome"],
-              'cognome_cliente': cliente["cognome"],
-              'email': cliente["email"],
-              'id_cliente': cliente["id_cliente"],
-              'telefono': cliente["telefono"],
-              'citta': cliente["citta"],
-              'via': cliente["via"],
-              'codice_fiscale': cliente["codice_fiscale"],
-              'lavori': p["lavori"] ?? [],
-              'rate': p["rate"] ?? [],
-            }).toList(),
-          };
+            'lavori': p["lavori"] ?? [],
+            'rate': p["rate"] ?? [],
+          }).toList(),
+        };
 
-          clienti[clienteKey] = [clienteInfo];
-        }
-
-        setState(() {
-          clientiConPreventivi = clienti;
-          isLoading = false;
-        });
-      } else {
-        throw Exception('Errore durante il recupero dei dati');
+        clienti[clienteKey] = [clienteInfo];
       }
-    } catch (e) {
-      setState(() => isLoading = false);
+
+      setState(() {
+        clientiConPreventivi = clienti;
+        isLoading = false;
+      });
+    } else {
+      throw Exception('Errore durante il recupero dei dati');
+    }
+  } catch (e) {
+    setState(() => isLoading = false);
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Errore: ${e.toString()}'),
@@ -98,6 +107,7 @@ class _HomePageState extends State<HomePage> {
       );
     }
   }
+}
 
   String capitalize(String text) {
     if (text.isEmpty) return text;
@@ -116,24 +126,31 @@ class _HomePageState extends State<HomePage> {
     return '0.00';
   }
 
-  Future<void> fetchDocumenti() async {
-    try {
-      final response = await http.get(Uri.parse('http://94.176.182.61:3000/documenti'));
+Future<void> fetchDocumenti() async {
+  try {
+    // Verifica se l'utente è admin
+    final isAdmin = await AuthService().isAdmin();
+    if (!isAdmin) {
+      throw Exception('Accesso negato: solo gli admin possono accedere');
+    }
 
-      if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
-        Map<String, List<Map<String, dynamic>>> clienti = {};
-        for (var item in data) {
-          final clienteKey = "${item["nome_cliente"]} ${item["cognome_cliente"]}";
-          clienti.putIfAbsent(clienteKey, () => []).add(item);
-        }
-        setState(() {
-          clientiConDocumenti = clienti;
-        });
-      } else {
-        throw Exception('Errore durante il recupero dei documenti');
+    final response = await ApiClient().get('documenti');
+
+    if (response.statusCode == 200) {
+      final List<dynamic> data = json.decode(response.body);
+      Map<String, List<Map<String, dynamic>>> clienti = {};
+      for (var item in data) {
+        final clienteKey = "${item["nome_cliente"]} ${item["cognome_cliente"]}";
+        clienti.putIfAbsent(clienteKey, () => []).add(item);
       }
-    } catch (e) {
+      setState(() {
+        clientiConDocumenti = clienti;
+      });
+    } else {
+      throw Exception('Errore durante il recupero dei documenti');
+    }
+  } catch (e) {
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Errore documenti: $e'),
@@ -142,6 +159,7 @@ class _HomePageState extends State<HomePage> {
       );
     }
   }
+}
   // Funzione per confermare la cancellazione
 Future<void> _confirmDeleteCliente(int idCliente, String nomeCliente) async {
   final confirm = await showDialog<bool>(
@@ -182,10 +200,13 @@ Future<void> _confirmDeleteCliente(int idCliente, String nomeCliente) async {
 
 Future<void> _deleteCliente(int idCliente) async {
   try {
-    final response = await http.delete(
-      Uri.parse('http://94.176.182.61:3000/clienti/$idCliente'),
-      headers: {'Content-Type': 'application/json'},
-    );
+    // Verifica se l'utente è admin
+    final isAdmin = await AuthService().isAdmin();
+    if (!isAdmin) {
+      throw Exception('Accesso negato: solo gli admin possono cancellare clienti');
+    }
+
+    final response = await ApiClient().delete('clienti/$idCliente');
 
     if (response.statusCode == 200) {
       // Ricarica i dati dopo la cancellazione
@@ -242,6 +263,7 @@ Future<void> _refreshData() async {
 }
 
 void _showClienteMenu(BuildContext context, int idCliente, String nomeCliente, Map<String, dynamic> clienteData) {
+  //final isAdmin = await AuthService().isAdmin();
   showModalBottomSheet(
     context: context,
     builder: (context) {
@@ -966,13 +988,17 @@ Future<void> _navigateToEditCliente(Map<String, dynamic> clienteData) async {
     if (result == true) fetchDocumenti();
   }
 
-  Future<void> _generatePdf(Map<String, dynamic> preventivo) async {
-    try {
-      await PdfService.generateAndOpenPdf(
-        preventivo["id_preventivo"],
-        preventivo,
-      );
-    } catch (e) {
+Future<void> _generatePdf(Map<String, dynamic> preventivo) async {
+  // Mostra il dialog di caricamento
+  _showPdfLoadingDialog();
+  
+  try {
+    await PdfService.generateAndOpenPdf(
+      preventivo["id_preventivo"],
+      preventivo,
+    );
+  } catch (e) {
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Errore generazione PDF: $e'),
@@ -980,7 +1006,44 @@ Future<void> _navigateToEditCliente(Map<String, dynamic> clienteData) async {
         ),
       );
     }
+  } finally {
+    // Chiudi il dialog
+    if (mounted) {
+      Navigator.of(context, rootNavigator: true).pop();
+    }
   }
+}
+void _showPdfLoadingDialog() {
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (BuildContext context) {
+      return Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        child: Center(
+          child: Container(
+            padding: EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.orange),
+                ),
+                SizedBox(height: 16),
+                Text('Generazione PDF in corso...'),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
 
   Future<void> _editPreventivo(Map<String, dynamic> preventivo) async {
     final result = await Navigator.push(
@@ -1030,5 +1093,6 @@ Future<void> _navigateToEditCliente(Map<String, dynamic> clienteData) async {
     }
     return grouped;
   }
+  
 
 }

@@ -45,7 +45,8 @@ class DefaultFirebaseOptions {
     appId: '1:755559667588:web:4e440942cada4a6dc96fd1',
     messagingSenderId: '755559667588',
     projectId: 'sconga-app-251124',
-    authDomain: 'sconga-app-251124.firebaseapp.com',
+    //authDomain: 'sconga-app-251124.firebaseapp.com',
+    authDomain: 'imcimpianti.cloud',
     storageBucket: 'sconga-app-251124.firebasestorage.app',
     measurementId: 'G-EP38DH7958',
   );

@@ -6,6 +6,8 @@ import 'main_home_page.dart';
 import 'home_page.dart';
 import 'lista_richieste.dart';
 import 'package:preventivi_app/services/email_service.dart';
+import 'package:preventivi_app/services/auth_service.dart';
+import 'package:preventivi_app/services/api_client.dart';
 
 class RevisioneCondizionatoriPage extends StatefulWidget {
   @override
@@ -32,6 +34,8 @@ class _RevisioneCondizionatoriPageState extends State<RevisioneCondizionatoriPag
   TextEditingController _filtroNomeController = TextEditingController();
   String? _filtroAnno;
   List<dynamic> clientiFiltrati = [];
+  final AuthService _authService = AuthService();
+  final ApiClient _apiClient = ApiClient();
 
 final Map<String, String> tipiCondizionatore = {
     'mono_split': 'Mono Split',
@@ -45,6 +49,7 @@ final Map<String, String> tipiCondizionatore = {
   void initState() {
     super.initState();
     _caricaDati();
+    _caricaClientiPerDropdown();
   }
 
   @override
@@ -62,26 +67,53 @@ Future<void> _caricaDati() async {
   });
 
   try {
-    final [clientiRes, condizionatoriRes] = await Future.wait([
-      http.get(Uri.parse('http://94.176.182.61:3000/api/clienti')),
-     http.get(Uri.parse('http://94.176.182.61:3000/api/clienti-condizionatori')),
-    ]);
+    print('🔵 Inizio caricamento dati...');
+    
+    final condizionatoriRes = await _apiClient.get('clienti-condizionatori');
+    //print('🔵 Risposta condizionatori: ${condizionatoriRes.statusCode}');
+    //print('🔵 Body condizionatori: ${condizionatoriRes.body}');
 
-    if (clientiRes.statusCode == 200 && condizionatoriRes.statusCode == 200) {
+    if (condizionatoriRes.statusCode == 200) {
+      final condizionatoriData = json.decode(condizionatoriRes.body);
+      
+      // FILTRA: tiene solo i clienti che hanno almeno un condizionatore (id_condizionatore non null)
+      final clientiConCondizionatoriFiltrati = condizionatoriData.where((cliente) => 
+        cliente['id_condizionatore'] != null
+      ).toList();
+      
+      ///print('🔵 Clienti totali ricevuti: ${condizionatoriData.length}');
+      //print('🔵 Clienti con condizionatori: ${clientiConCondizionatoriFiltrati.length}');
+
       setState(() {
-        clienti = json.decode(clientiRes.body);
-        clientiConCondizionatori = json.decode(condizionatoriRes.body);
-        clientiFiltrati = clientiConCondizionatori; // Inizializza la lista filtrata
+        clientiConCondizionatori = clientiConCondizionatoriFiltrati;
+        clientiFiltrati = clientiConCondizionatoriFiltrati;
         isLoading = false;
       });
     } else {
+      print('🔴 Errore status code non 200');
       throw Exception('Errore nel caricamento dei dati');
     }
   } catch (e) {
+    print('🔴 Errore completo: $e');
     setState(() {
       isLoading = false;
       error = 'Errore nel recupero dei dati: ${e.toString()}';
     });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Errore: ${e.toString()}')),
+    );
+  }
+}
+Future<void> _caricaClientiPerDropdown() async {
+  try {
+    final clientiRes = await _apiClient.get('clienti');
+    if (clientiRes.statusCode == 200) {
+      setState(() {
+        clienti = json.decode(clientiRes.body);
+      });
+    }
+  } catch (e) {
+    print('Errore nel caricamento clienti per dropdown: $e');
   }
 }
 
@@ -95,9 +127,8 @@ Future<void> _aggiungiCondizionatore() async {
   }
 
   try {
-    final response = await http.post(
-      Uri.parse('http://94.176.182.61:3000/api/condizionatori'),
-      headers: {'Content-Type': 'application/json'},
+    final response = await _apiClient.post(
+      'condizionatori',
       body: json.encode({
         'id_cliente': idClienteSelezionato,
         'tipo_condizionatore': tipoCondizionatoreSelezionato,
@@ -115,6 +146,11 @@ Future<void> _aggiungiCondizionatore() async {
         mostraFormAggiunta = false;
         _resetForm();
       });
+    } else if (response.statusCode == 401) {
+      await _authService.handleUnauthorized();
+      if (mounted) {
+        Navigator.pushReplacementNamed(context, '/login');
+      }
     } else {
       throw Exception('Errore nell\'aggiunta del Condizionatore: ${response.body}');
     }
@@ -167,6 +203,18 @@ Future<void> _aggiungiCondizionatore() async {
     });
   }
 
+  String _formatData(String? dataString) {
+  if (dataString == null || dataString.isEmpty) return 'N/D';
+  
+  try {
+    // Estrae solo la parte della data (AAAA-MM-DD) dalla stringa ISO completa
+    final dateTime = DateTime.parse(dataString);
+    return '${dateTime.year}-${dateTime.month.toString().padLeft(2, '0')}-${dateTime.day.toString().padLeft(2, '0')}';
+  } catch (e) {
+    return 'N/D';
+  }
+}
+
   void _confermaEliminazioneCondizionatore(Map<String, dynamic> condizionatore) {
   showDialog(
     context: context,
@@ -190,7 +238,7 @@ Future<void> _aggiungiCondizionatore() async {
   );
 }
 
-void _avvisaCliente(Map<String, dynamic> condizionatore) async {
+void _avvisaCliente(Map<String, dynamic> condizionatore, Map<String, dynamic> cliente) async {
   final condizionatoreId = condizionatore['id_condizionatore'];
   
   setState(() {
@@ -198,23 +246,37 @@ void _avvisaCliente(Map<String, dynamic> condizionatore) async {
   });
 
   try {
-    final email = condizionatore['email']?.toString().trim();
+    final email = cliente['email']?.toString().trim();
     
     if (email == null || !email.contains('@')) {
       throw Exception('Email cliente non valida');
     }
 
-    await EmailService.sendBoilerNotification(
-      recipientEmail: email,
-      boilerId: condizionatore['id_condizionatore']?.toString() ?? 'N/D',
-      clientName: '${condizionatore['nome']} ${condizionatore['cognome']}',
+    final response = await _apiClient.post(
+      'condizionatori/invia-avviso',
+      body: json.encode({
+        'recipientEmail': email,
+        'condizionatoreId': condizionatoreId.toString(),
+        //'clientName': '${condizionatore['nome']} ${condizionatore['cognome']}'
+        'clientName': '${cliente['nome']} ${cliente['cognome']}', 
+        'marca': condizionatore['marca'],
+        'modello': condizionatore['modello']
+      }),
     );
 
-    _mostraSnackBar('Avviso inviato a $email', Colors.green);
+    if (response.statusCode == 200) {
+      _mostraSnackBar('Avviso inviato a $email', Colors.green);
+    } else if (response.statusCode == 401) {
+      await _authService.handleUnauthorized();
+      if (mounted) {
+        Navigator.pushReplacementNamed(context, '/login');
+      }
+    } else {
+      throw Exception('Errore nell\'invio dell\'email');
+    }
   } catch (e) {
     final errorMessage = e.toString().replaceAll('Exception: ', '');
     _mostraSnackBar('Errore: $errorMessage', Colors.red);
-    print('Errore completo: $e');
   } finally {
     setState(() {
       isSendingEmailMap[condizionatoreId] = false;
@@ -226,13 +288,16 @@ Future<void> _eliminaCondizionatore(int? idCondizionatore) async {
   if (idCondizionatore == null) return;
 
   try {
-    final response = await http.delete(
-      Uri.parse('http://94.176.182.61:3000/api/condizionatori/$idCondizionatore'),
-    );
+    final response = await _apiClient.delete('condizionatori/$idCondizionatore');
 
     if (response.statusCode == 200) {
-      _mostraSnackBar('Condizionatore eliminata con successo', Colors.green);
-      await _caricaDati(); // Ricarica i dati
+      _mostraSnackBar('Condizionatore eliminato con successo', Colors.green);
+      await _caricaDati();
+    } else if (response.statusCode == 401) {
+      await _authService.handleUnauthorized();
+      if (mounted) {
+        Navigator.pushReplacementNamed(context, '/login');
+      }
     } else {
       throw Exception('Errore nell\'eliminazione');
     }
@@ -244,20 +309,21 @@ Future<void> _eliminaCondizionatore(int? idCondizionatore) async {
 void _applicaFiltri() {
   setState(() {
     if (_filtroNomeController.text.isEmpty && _filtroAnno == null) {
+      // Usa già la lista filtrata di clienti con condizionatori
       clientiFiltrati = clientiConCondizionatori;
       return;
     }
 
-    clientiFiltrati = clientiConCondizionatori.where((condizionatore) {
-      final nomeCompleto = '${condizionatore['cognome']} ${condizionatore['nome']}'.toLowerCase();
+    clientiFiltrati = clientiConCondizionatori.where((cliente) {
+      final nomeCompleto = '${cliente['cognome']} ${cliente['nome']}'.toLowerCase();
       final cercaNome = _filtroNomeController.text.toLowerCase();
       
       bool matchesNome = nomeCompleto.contains(cercaNome) || _filtroNomeController.text.isEmpty;
       
       bool matchesAnno = true;
-      if (_filtroAnno != null && condizionatore['data_scadenza'] != null) {
+      if (_filtroAnno != null && cliente['data_scadenza'] != null) {
         try {
-          final annoScadenza = DateTime.parse(condizionatore['data_scadenza']).year.toString();
+          final annoScadenza = DateTime.parse(cliente['data_scadenza']).year.toString();
           matchesAnno = annoScadenza == _filtroAnno;
         } catch (e) {
           matchesAnno = false;
@@ -453,12 +519,29 @@ Widget _buildListaCondizionatori() {
     final idCliente = condizionatore['id_cliente'];
     if (!map.containsKey(idCliente)) {
       map[idCliente] = {
-        'cliente': condizionatore,
+        'cliente': {
+          'id_cliente': condizionatore['id_cliente'],
+          'nome': condizionatore['nome'],
+          'cognome': condizionatore['cognome'],
+          'citta': condizionatore['citta'],
+          'via': condizionatore['via'],
+          'email': condizionatore['email'],
+          'telefono': condizionatore['telefono'],
+          'codice_fiscale': condizionatore['codice_fiscale'],
+        },
         'condizionatori': [],
       };
     }
     if (condizionatore['id_condizionatore'] != null) {
-      map[idCliente]!['condizionatori'].add(condizionatore);
+      map[idCliente]!['condizionatori'].add({
+        'id_condizionatore': condizionatore['id_condizionatore'],
+        'tipo_condizionatore': condizionatore['tipo_condizionatore'],
+        'potenza': condizionatore['potenza'],
+        'data_installazione': condizionatore['data_installazione'],
+        'modello': condizionatore['modello'],
+        'marca': condizionatore['marca'],
+        'data_scadenza': condizionatore['data_scadenza'],
+      });
     }
     return map;
   }).values.toList();
@@ -521,7 +604,7 @@ Widget _buildListaCondizionatori() {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(
-            'Lista Condizionatori',
+            'Lista Clienti con Condizionatori',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           Row(
@@ -581,7 +664,7 @@ Widget _buildListaCondizionatori() {
               ],
             ),
             children: [
-              if (condizionatori.isNotEmpty) ...condizionatori.map((condizionatore) => _buildCondizionatoreTile(condizionatore)),
+              if (condizionatori.isNotEmpty) ...condizionatori.map((condizionatore) => _buildCondizionatoreTile(condizionatore, cliente)),
             ],
           ),
         );
@@ -590,7 +673,7 @@ Widget _buildListaCondizionatori() {
   );
 }
 
-Widget _buildCondizionatoreTile(Map<String, dynamic> condizionatore) {
+Widget _buildCondizionatoreTile(Map<String, dynamic> condizionatore, Map<String, dynamic> cliente) {
   return ListTile(
     contentPadding: EdgeInsets.symmetric(horizontal: 16),
     leading: Icon(Icons.ac_unit, color: Colors.blue.shade600),
@@ -607,10 +690,10 @@ Widget _buildCondizionatoreTile(Map<String, dynamic> condizionatore) {
         if (condizionatore['modello'] != null)
         Text('Modello: ${condizionatore['modello'] ?? 'N/D'}'),
         Text('Potenza: ${condizionatore['potenza']?.toString() ?? 'N/D'} BTU'),
-        Text('Installazione: ${condizionatore['data_installazione']}'),
+        Text('Installazione: ${_formatData(condizionatore['data_installazione'])}'), // MODIFICATO
         SizedBox(height: 4),
         Text(
-          'Scadenza revisione: ${condizionatore['data_scadenza']}',
+          'Scadenza revisione: ${_formatData(condizionatore['data_scadenza'])}', // MODIFICATO
           style: TextStyle(
             color: _verificaScadenza(condizionatore['data_scadenza']) ? Colors.red : Colors.green,
             fontWeight: FontWeight.bold,
@@ -645,7 +728,7 @@ Widget _buildCondizionatoreTile(Map<String, dynamic> condizionatore) {
               ),
               onPressed: isSendingEmailMap[condizionatore['id_condizionatore']] == true
                   ? null
-                  : () => _avvisaCliente(condizionatore),
+                  : () => _avvisaCliente(condizionatore, cliente),
             ),     
             SizedBox(width: 8),
             OutlinedButton.icon(
@@ -668,15 +751,22 @@ Widget _buildCondizionatoreTile(Map<String, dynamic> condizionatore) {
   );
 }
 
-  bool _verificaScadenza(String? dataScadenza) {
-    if (dataScadenza == null) return false;
-    try {
-      final scadenza = DateTime.parse(dataScadenza);
-      return scadenza.isBefore(DateTime.now());
-    } catch (e) {
-      return false;
-    }
+bool _verificaScadenza(String? dataScadenza) {
+  if (dataScadenza == null) return false;
+  try {
+    // Parsifica la data completa e considera solo la parte della data
+    final scadenza = DateTime.parse(dataScadenza);
+    final oggi = DateTime.now();
+    
+    // Confronta solo anno, mese e giorno (ignora l'orario)
+    final scadenzaSenzaOra = DateTime(scadenza.year, scadenza.month, scadenza.day);
+    final oggiSenzaOra = DateTime(oggi.year, oggi.month, oggi.day);
+    
+    return scadenzaSenzaOra.isBefore(oggiSenzaOra);
+  } catch (e) {
+    return false;
   }
+}
 
 void _mostraDettagliCondizionatore(Map<String, dynamic> condizionatore) {
   showDialog(
@@ -694,8 +784,8 @@ void _mostraDettagliCondizionatore(Map<String, dynamic> condizionatore) {
             if (condizionatore['modello'] != null)
               _buildDettaglioCondizionatore('Modello', condizionatore['modello']),
             _buildDettaglioCondizionatore('Potenza', '${condizionatore['potenza']} BTU'),
-            _buildDettaglioCondizionatore('Data installazione', condizionatore['data_installazione']),
-            _buildDettaglioCondizionatore('Data scadenza', condizionatore['data_scadenza']),
+            _buildDettaglioCondizionatore('Data installazione', _formatData(condizionatore['data_installazione'])), // MODIFICATO
+            _buildDettaglioCondizionatore('Data scadenza', _formatData(condizionatore['data_scadenza'])), // MODIFICATO
             if (_verificaScadenza(condizionatore['data_scadenza']))
               Container(
                 margin: EdgeInsets.only(top: 12),
@@ -764,13 +854,13 @@ Widget build(BuildContext context) {
           onPressed: () => Scaffold.of(context).openDrawer(),
         ),
       ),
-      actions: [
-        IconButton(
-          icon: Icon(Icons.add),
-          onPressed: () => _apriFormAggiunta(),
-          tooltip: 'Aggiungi Condizionatore',
-        ),
-      ],
+     // actions: [
+      //  IconButton(
+      //    icon: Icon(Icons.add),
+      //    onPressed: () => _apriFormAggiunta(),
+      //    tooltip: 'Aggiungi Condizionatore',
+      //  ),
+      //],
     ),
     drawer: _buildDrawer(context), // Aggiungi questo metodo
     body: isLoading

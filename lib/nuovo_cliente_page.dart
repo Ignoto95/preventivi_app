@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+//import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'services/api_client.dart';
+import 'services/auth_service.dart';
 
 class NuovoClientePage extends StatefulWidget {
   @override
@@ -19,52 +21,63 @@ class _NuovoClientePageState extends State<NuovoClientePage> {
 
   bool _isLoading = false;
 
-  Future<void> _salvaCliente() async {
-    if (!_formKey.currentState!.validate()) return;
+Future<void> _salvaCliente() async {
+  if (!_formKey.currentState!.validate()) return;
 
-    setState(() => _isLoading = true);
+  setState(() => _isLoading = true);
 
-    final clienteData = {
-      'nome': _nomeController.text.trim(),
-      'cognome': _cognomeController.text.trim(),
-      'citta': _cittaController.text.trim(),
-      'via': _viaController.text.trim(),
-      'email': _emailController.text.trim(),
-      'telefono': _telefonoController.text.trim(),
-      'codice_fiscale': _codiceFiscaleController.text.trim(),
-    };
+  final clienteData = {
+    'nome': _nomeController.text.trim(),
+    'cognome': _cognomeController.text.trim(),
+    'citta': _cittaController.text.trim(),
+    'via': _viaController.text.trim(),
+    'email': _emailController.text.trim(),
+    'telefono': _telefonoController.text.trim(),
+    'codice_fiscale': _codiceFiscaleController.text.trim(),
+  };
 
-    try {
-      final response = await http.post(
-        Uri.parse('http://94.176.182.61:3000/clienti'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode(clienteData),
-      );
+  try {
+    // Verifica se l'utente è admin
+    final isAdmin = await AuthService().isAdmin();
+    if (!isAdmin) {
+      throw Exception('Solo gli admin possono creare nuovi clienti');
+    }
 
-      if (response.statusCode == 201) {
-        final responseData = json.decode(response.body);
+    final response = await ApiClient().post(
+      'clienti',
+      body: json.encode(clienteData),
+    );
+
+    if (response.statusCode == 201) {
+      final responseData = json.decode(response.body);
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+          const SnackBar(
             content: Text('Cliente creato con successo!'),
             backgroundColor: Colors.green,
           ),
         );
-        await Future.delayed(Duration(seconds: 1));
+        await Future.delayed(const Duration(seconds: 1));
         Navigator.pop(context, responseData['id_cliente']);
-      } else {
-        throw Exception('Errore ${response.statusCode}: ${response.body}');
       }
-    } catch (e) {
+    } else {
+      throw Exception('Errore ${response.statusCode}: ${response.body}');
+    }
+  } catch (e) {
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Errore durante il salvataggio: ${e.toString()}'),
           backgroundColor: Colors.red,
         ),
       );
-    } finally {
+    }
+  } finally {
+    if (mounted) {
       setState(() => _isLoading = false);
     }
   }
+}
 
   @override
   Widget build(BuildContext context) {

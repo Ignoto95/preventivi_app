@@ -2,49 +2,44 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'dart:html' as html; // Solo per Web
+import 'api_client.dart';
+import 'auth_service.dart';
+
 
 class PdfService {
   static Future<void> generateAndOpenPdf(
       int idPreventivo, Map<String, dynamic> datiPreventivo) async {
-    final String url =
-        'http://94.176.182.61:3000/generate-pdf/preventivo/$idPreventivo';
-
     try {
-      final response = await http.post(
-        Uri.parse(url),
-        headers: {
-          'Content-Type': 'application/json',
-        },
+      final isAdmin = await AuthService().isAdmin();
+      if (!isAdmin) throw Exception('Accesso negato: solo admin');
+
+      final response = await ApiClient().post(
+        'generate-pdf/preventivo/$idPreventivo',
         body: jsonEncode(datiPreventivo),
+        headers: {
+          'Accept': 'application/pdf', // Specifica che vuoi ricevere un PDF
+        },
       );
 
       if (response.statusCode == 200) {
-        final Uint8List pdfBytes = response.bodyBytes;
+        final pdfBytes = response.bodyBytes;
+        final nome = datiPreventivo['nome_cliente']?.replaceAll(' ', '_') ?? 'Nome';
+        final cognome = datiPreventivo['cognome_cliente']?.replaceAll(' ', '_') ?? 'Cognome';
+        final fileName = 'Preventivo_${nome}_$cognome.pdf';
 
         final blob = html.Blob([pdfBytes], 'application/pdf');
-        final blobUrl = html.Url.createObjectUrlFromBlob(blob);
-
-        final nome = datiPreventivo['nome_cliente'] ?? 'Nome';
-        final cognome = datiPreventivo['cognome_cliente'] ?? 'Cognome';
-        final fileName = 'Preventivo.${nome}.${cognome}.pdf'
-            .replaceAll(' ', '_')
-            .replaceAll(RegExp(r'[^\w\.]'), '');
-
-        final anchor = html.AnchorElement(href: blobUrl)
+        final url = html.Url.createObjectUrlFromBlob(blob);
+        final anchor = html.AnchorElement(href: url)
           ..setAttribute('download', fileName)
           ..click();
-
-        html.Url.revokeObjectUrl(blobUrl);
+        
+        html.Url.revokeObjectUrl(url);
       } else {
-        final errorMessage =
-            'Errore nella generazione del PDF: ${response.statusCode}';
-        print(errorMessage);
-        throw Exception(errorMessage);
+        throw Exception('Errore ${response.statusCode}: ${response.body}');
       }
     } catch (e) {
-      final errorMessage = 'Errore durante la richiesta PDF: $e';
-      print(errorMessage);
-      throw Exception(errorMessage);
+      print('❌ Errore generazione PDF: $e');
+      throw Exception('Errore generazione PDF: $e');
     }
   }
 }

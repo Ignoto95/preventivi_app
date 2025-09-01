@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'services/api_client.dart';
+import 'services/auth_service.dart';
 
 class CreatePreventivoFromClientePage extends StatefulWidget {
   final String nome;
@@ -66,107 +68,133 @@ class _CreatePreventivoFromClientePageState extends State<CreatePreventivoFromCl
     return totale;
   }
 
-  Future<void> savePreventivo() async {
-    final citta = cittaController.text.trim();
-    final via = viaController.text.trim();
-    final dataPreventivo = dataPreventivoController.text.trim();
-    final email = emailController.text.trim();
-    final telefono = telefonoController.text.trim();
-    final codiceFiscale = codiceFiscaleController.text.trim();
+Future<void> savePreventivo() async {
+  final citta = cittaController.text.trim();
+  final via = viaController.text.trim();
+  final dataPreventivo = dataPreventivoController.text.trim();
+  final email = emailController.text.trim();
+  final telefono = telefonoController.text.trim();
+  final codiceFiscale = codiceFiscaleController.text.trim();
 
-    if (citta.isEmpty || via.isEmpty || lavori.isEmpty) {
+  if (citta.isEmpty || via.isEmpty || lavori.isEmpty) {
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Compila tutti i campi e aggiungi almeno un lavoro.')),
+        const SnackBar(content: Text('Compila tutti i campi e aggiungi almeno un lavoro.')),
       );
-      return;
     }
+    return;
+  }
 
-    if (!email.contains('@') || telefono.length == 11 ) {
+  if (!email.contains('@') || telefono.length == 11) {
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Inserisci un\'email e un numero di telefono validi.')),
+        const SnackBar(content: Text('Inserisci un\'email e un numero di telefono validi.')),
       );
-      return;
     }
-    
-    final rate = rateControllers.map((rata) {
-      final descrizione = rata['descrizione']!.text.trim();
-      final percentualeText = rata['percentuale']!.text.trim();
-      final percentuale = double.tryParse(percentualeText) ?? 0;
-      return {
-        'descrizione': descrizione,
-        'percentuale': percentuale,
-      };
-    }).toList();
-    
-    final sommaPercentuali = rate.fold<double>(0, (sum, r) => sum + (r['percentuale'] as double));
-    
-    if (sommaPercentuali > 100) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('La somma delle percentuali delle rate non può superare il 100%.')),
-      );
-      return;
-    }
-
-    final preventivoData = {
-      'cliente': {
-        'id_cliente': widget.idCliente,
-        'nome': widget.nome,
-        'cognome': widget.cognome,
-        'citta': citta,
-        'via': via,
-        'email': email,
-        'telefono': telefono,
-        'codice_fiscale': codiceFiscale,
-      },
-      'data_preventivo': dataPreventivo,
-      'lavori': lavori,
-      'rate': rate,
+    return;
+  }
+  
+  final rate = rateControllers.map((rata) {
+    final descrizione = rata['descrizione']!.text.trim();
+    final percentualeText = rata['percentuale']!.text.trim();
+    final percentuale = double.tryParse(percentualeText) ?? 0;
+    return {
+      'descrizione': descrizione,
+      'percentuale': percentuale,
     };
-
-    try {
-      final response = await http.post(
-        Uri.parse('http://94.176.182.61:3000/preventivo'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode(preventivoData),
+  }).toList();
+  
+  final sommaPercentuali = rate.fold<double>(0, (sum, r) => sum + (r['percentuale'] as double));
+  
+  if (sommaPercentuali > 100) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('La somma delle percentuali delle rate non può superare il 100%.')),
       );
+    }
+    return;
+  }
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
+  final preventivoData = {
+    'cliente': {
+      'id_cliente': widget.idCliente,
+      'nome': widget.nome,
+      'cognome': widget.cognome,
+      'citta': citta,
+      'via': via,
+      'email': email,
+      'telefono': telefono,
+      'codice_fiscale': codiceFiscale,
+    },
+    'data_preventivo': dataPreventivo,
+    'lavori': lavori,
+    'rate': rate,
+  };
+
+  try {
+    // Verifica se l'utente è admin
+    final isAdmin = await AuthService().isAdmin();
+    if (!isAdmin) {
+      throw Exception('Solo gli admin possono salvare preventivi');
+    }
+
+    final response = await ApiClient().post(
+      'preventivo',
+      body: json.encode(preventivoData),
+    );
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+          const SnackBar(
             content: Text('Preventivo salvato con successo!'),
             backgroundColor: Colors.green,
           ),
         );
         Navigator.pop(context, true);
-      } else {
-        throw Exception('Errore nel salvataggio: ${response.body}');
       }
-    } catch (e) {
+    } else {
+      throw Exception('Errore nel salvataggio: ${response.body}');
+    }
+  } catch (e) {
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Errore: ${e.toString()}')),
       );
     }
   }
+}
 
-    Future<void> _loadDescrizioniLavoro() async {
-  setState(() {
-    _isLoadingDescrizioni = true;
-  });
+Future<void> _loadDescrizioniLavoro() async {
+  if (mounted) {
+    setState(() {
+      _isLoadingDescrizioni = true;
+    });
+  }
   
   try {
-    final response = await http.get(Uri.parse('http://94.176.182.61:3000/descrizioni-lavoro'));
+    final response = await ApiClient().get('descrizioni-lavoro');
     if (response.statusCode == 200) {
       final List<dynamic> data = json.decode(response.body);
-      setState(() {
-        _descrizioniLavoro = List<String>.from(data);
-      });
+      if (mounted) {
+        setState(() {
+          _descrizioniLavoro = List<String>.from(data);
+        });
+      }
     }
   } catch (e) {
     print('Errore nel caricamento delle descrizioni: $e');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Errore nel caricamento delle descrizioni')),
+      );
+    }
   } finally {
-    setState(() {
-      _isLoadingDescrizioni = false;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoadingDescrizioni = false;
+      });
+    }
   }
 }
 
@@ -185,34 +213,43 @@ class _CreatePreventivoFromClientePageState extends State<CreatePreventivoFromCl
   }
 
 Future<void> _loadTipiLavoro() async {
-  setState(() {
-    _isLoadingTipiLavoro = true;
-  });
+  if (mounted) {
+    setState(() {
+      _isLoadingTipiLavoro = true;
+    });
+  }
   
   try {
-    final response = await http.get(Uri.parse('http://94.176.182.61:3000/tipi-lavoro'));
+    final response = await ApiClient().get('tipi-lavoro');
     if (response.statusCode == 200) {
       final List<dynamic> data = json.decode(response.body);
       print('Tipi lavoro ricevuti: $data');
-      setState(() {
-        _tipiLavoro = List<String>.from(data);
-        _tipiLavoro.sort(); // Ordina alfabeticamente i tipi di lavoro
-      });
+      if (mounted) {
+        setState(() {
+          _tipiLavoro = List<String>.from(data)..sort();
+        });
+      }
     } else {
       print('Errore nella risposta: ${response.statusCode}');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Errore nel caricamento dei tipi di lavoro')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Errore nel caricamento dei tipi di lavoro')),
+        );
+      }
     }
   } catch (e) {
     print('Errore nel caricamento dei tipi di lavoro: $e');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Errore di connessione')),
-    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Errore di connessione')),
+      );
+    }
   } finally {
-    setState(() {
-      _isLoadingTipiLavoro = false;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoadingTipiLavoro = false;
+      });
+    }
   }
 }
 
@@ -316,7 +353,8 @@ void showLavoroDialog({Map<String, dynamic>? lavoro, int? index}) {
                       ],
                     ),
                   SizedBox(height: 16),
-                  // Sezione descrizione con suggerimenti
+                  
+                  // Campo descrizione con AUTCOMPLETE
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -324,81 +362,81 @@ void showLavoroDialog({Map<String, dynamic>? lavoro, int? index}) {
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8.0),
                           child: Text(
-                            'Descrizioni disponibili:',
+                            'Inizia a digitare per vedere i suggerimenti:',
                             style: TextStyle(
                               fontSize: 14,
                               color: Colors.grey[600],
                             ),
                           ),
                         ),
-                      if (_descrizioniLavoro.isNotEmpty)
-                        SizedBox(
-                          height: 120,
-                          child: Card(
-                            elevation: 2,
-                            child: ListView.builder(
-                              shrinkWrap: true,
-                              itemCount: _descrizioniLavoro.length > 5 ? 5 : _descrizioniLavoro.length,
-                              itemBuilder: (context, idx) {
-                                final descrizione = _descrizioniLavoro[idx];
-                                return ListTile(
-                                  dense: true,
-                                  title: Text(
-                                    descrizione.length > 50 
-                                      ? '${descrizione.substring(0, 50)}...' 
-                                      : descrizione,
-                                    style: TextStyle(fontSize: 14),
-                                  ),
-                                  onTap: () {
-                                    descrizioneController.text = descrizione;
-                                  },
-                                );
-                              },
+                      
+                      Autocomplete<String>(
+                        optionsBuilder: (TextEditingValue textEditingValue) {
+                          if (textEditingValue.text.isEmpty) {
+                            return const Iterable<String>.empty();
+                          }
+                          return _descrizioniLavoro.where((option) =>
+                            option.toLowerCase().contains(textEditingValue.text.toLowerCase())
+                          );
+                        },
+                        onSelected: (String selection) {
+                          descrizioneController.text = selection;
+                        },
+                        fieldViewBuilder: (context, textEditingController, focusNode, onFieldSubmitted) {
+                          // Inizializza il controller con il valore esistente
+                          if (descrizioneController.text.isNotEmpty) {
+                            textEditingController.text = descrizioneController.text;
+                          }
+                          
+                          // Sincronizza i controller
+                          textEditingController.addListener(() {
+                            descrizioneController.text = textEditingController.text;
+                          });
+                          
+                          return TextField(
+                            controller: textEditingController,
+                            focusNode: focusNode,
+                            decoration: InputDecoration(
+                              labelText: 'Descrizione *',
+                              border: OutlineInputBorder(),
+                              filled: true,
+                              fillColor: Colors.grey[50],
+                              hintText: 'Digita per vedere suggerimenti...',
                             ),
-                          ),
-                        ),
-                      if (_descrizioniLavoro.length > 5)
-                        TextButton(
-                          child: Text('Mostra tutte le descrizioni'),
-                          onPressed: () {
-                            showDialog(
-                              context: context,
-                              builder: (context) => AlertDialog(
-                                title: Text('Seleziona una descrizione'),
-                                content: SizedBox(
-                                  width: double.maxFinite,
-                                  child: ListView.builder(
-                                    shrinkWrap: true,
-                                    itemCount: _descrizioniLavoro.length,
-                                    itemBuilder: (context, idx) {
-                                      return ListTile(
-                                        title: Text(_descrizioniLavoro[idx]),
-                                        onTap: () {
-                                          descrizioneController.text = _descrizioniLavoro[idx];
-                                          Navigator.pop(context);
-                                        },
-                                      );
-                                    },
-                                  ),
+                            maxLines: 3,
+                            keyboardType: TextInputType.multiline,
+                          );
+                        },
+                        optionsViewBuilder: (context, onSelected, options) {
+                          return Align(
+                            alignment: Alignment.topLeft,
+                            child: Material(
+                              elevation: 4,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: ConstrainedBox(
+                                constraints: BoxConstraints(maxHeight: 200),
+                                child: ListView.builder(
+                                  padding: EdgeInsets.zero,
+                                  shrinkWrap: true,
+                                  itemCount: options.length,
+                                  itemBuilder: (context, index) {
+                                    final option = options.elementAt(index);
+                                    return ListTile(
+                                      title: Text(option),
+                                      onTap: () => onSelected(option),
+                                    );
+                                  },
                                 ),
                               ),
-                            );
-                          },
-                        ),
-                      SizedBox(height: 8),
-                      TextField(
-                        controller: descrizioneController,
-                        decoration: InputDecoration(
-                          labelText: 'Descrizione *',
-                          border: OutlineInputBorder(),
-                          filled: true,
-                          fillColor: Colors.grey[50],
-                        ),
-                        maxLines: 3,
-                        keyboardType: TextInputType.multiline,
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ),
+                  
                   SizedBox(height: 16),
                   TextField(
                     controller: prezzoController,
