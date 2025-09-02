@@ -1,0 +1,31 @@
+const express = require('express');
+const path = require('path');
+const { PDFDocument } = require('pdf-lib'); // Da usare nei route handlers
+const fs = require('fs'); // Da usare nei route handlers
+const setupMiddlewares = require('./config/middlewares');
+const pool = require('./config/db'); // Spostato in config/db.js
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Setup middlewares
+setupMiddlewares(app);
+
+// Import routes
+const routes = [
+  require('./routes/clienti'),
+  require('./routes/preventivi'),
+  require('./routes/documenti'),
+  require('./routes/allegati'),
+  require('./routes/condizionatori'),
+  require('./routes/statistiche'),
+  require('./routes/auth')
+];
+
+// Register routes
+routes.forEach(route => app.use('/api', route));
+
+// Avvio server
+app.listen(port, () => {
+  console.log(`Server in ascolto sulla porta ${port}`);
+});

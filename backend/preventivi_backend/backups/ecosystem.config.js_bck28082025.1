@@ -1,0 +1,11 @@
+module.exports = {
+  apps: [{
+    name: 'imc-backend',
+    script: 'server.js', // o il tuo file principale
+    instances: 'max',
+    env: {
+      NODE_ENV: 'production',
+      PORT: 3000
+    }
+  }]
+};

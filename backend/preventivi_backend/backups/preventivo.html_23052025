@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Preventivo</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 2cm;
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #ffffff;
+      color: #333;
+      font-size: 12px;
+      margin: 0;
+    }
+
+    .container {
+      max-width: 750px;
+      margin: auto;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+
+    .logo {
+      width: 150px;
+    }
+
+    .logo img {
+      width: 100%;
+    }
+
+    .slogan {
+      font-size: 11px;
+      margin-top: 5px;
+      font-weight: bold;
+    }
+
+    h1 {
+      display: none; /* disabilitato */
+    }
+
+    h2, h3 {
+      color: #1a90ff;
+      margin-bottom: 10px;
+    }
+
+    .section {
+      background-color: #f9f9f9;
+      padding: 15px;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+
+    .section p {
+      margin: 4px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+      font-size: 12px;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #d0e9ff;
+      color: #1a90ff;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+
+	.totale {
+	text-align: right;
+	font-size: 16px;
+	font-weight: bold;
+	margin-top: 40px; /* aumentato lo spazio sopra */
+	color: #000000; /* testo nero */
+	}
+
+	ul.acconti {
+	list-style-type: disc;
+	padding-left: 20px;
+	margin-top: 10px;
+	}
+	
+	ul.acconti li {
+	margin-bottom: 5px;
+	font-size: 13px;
+	}
+		}
+
+    .note p {
+      font-size: 10px;
+      line-height: 1.5;
+      margin: 4px 0;
+    }
+
+    .footer {
+      margin-top: 40px;
+      font-size: 11px;
+      display: flex;
+      justify-content: space-between;
+      border-top: 1px solid #ccc;
+      padding-top: 10px;
+    }
+
+    .top-row {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 10px;
+    }
+
+    .cliente-info, .preventivo-info {
+      font-size: 12px;
+      line-height: 1.0;
+      max-width: 320px;
+    }
+
+    .cliente-info {
+      text-align: right;
+    }
+
+    .titolo-preventivo {
+      font-size: 13px;
+      font-weight: bold;
+      text-align: right;
+      margin-bottom: 5px;
+	  display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Intestazione con logo e slogan -->
+    <div class="header">
+      <div class="logo">
+        <img src="{{logo_path}}" alt="Logo I.M.C.">
+        <div class="slogan">COMPLETAMENTI EDILI ED IMPIANTI TECNOLOGICI</div>
+      </div>
+    </div>
+
+    <!-- Riga con Dati preventivo e Dati cliente -->
+    <div class="top-row">
+      <div class="preventivo-info">
+        <h3>Dati Preventivo</h3>
+        <p><strong>Numero:</strong> {{id_preventivo}}</p>
+        <p><strong>Data:</strong> {{data_preventivo}}</p>
+        <p><strong>Valido fino a:</strong> {{data_scadenza}}</p>
+      </div>
+
+      <div class="cliente-info">
+        <div class="titolo-preventivo">PREVENTIVO</div>
+        <h3>Dati Cliente</h3>
+        <p><strong>Nome:</strong> {{nome_cliente}} {{cognome_cliente}}</p>
+        <p><strong>Via:</strong> {{via}}</p>
+        <p><strong>Città:</strong> {{citta}}</p>
+        <p><strong>Telefono:</strong> {{telefono}}</p>
+        <p><strong>CF/P.IVA:</strong> {{codice_fiscale}}</p>
+        <p><strong>Email:</strong> {{email}}</p>
+      </div>
+    </div>
+
+    <!-- Tabella lavori -->
+    <div class="section">
+      <h3>Dettaglio Lavori</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Descrizione</th>
+            <th>Prezzo</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{lavori}}
+        </tbody>
+      </table>
+
+      <p class="totale">Totale complessivo: {{prezzo_totale}} €</p>
+
+		<div class="section">
+		<h3>Rate di Pagamento</h3>
+		<ul class="acconti">
+			{{rate}}
+		</ul>
+		</div>
+
+    <!-- Note e condizioni -->
+    <div class="section note" style="font-size: 11px; margin-top: 10px; padding: 5px;">
+      <h3 style="margin-bottom: 4px; font-size: 12px;">Note e Condizioni</h3>
+      <p><em>Variazioni o modifiche non previste nel preventivo saranno valutate e concordate in corso d’opera ed eventuali conguagli verranno corrisposti a S.A.L.</em></p>
+      <p><em>Al ritardo dei pagamenti a S.A.L. la I.M.C. si riserva il diritto di interrompere i lavori e di riprenderli a pagamento avvenuto.</em></p>
+      <p><em>Se per motivi non imputabili dalla I.M.C. i lavori non potranno essere portati a termine, la parte committente si impegnerà a versare a saldo l’intera somma detratta dei lavori non ultimati, che saranno conteggiati come lavori in economia.</em></p>
+      <p><em>I prezzi della manodopera sono esenti da IVA ai sensi dell’art.1 commi 9 e 11, della Legge 30/12/18 n°145.</em></p>
+      <p><em>Oneri a carico del committente: accesso e agibilità nelle aree interessate con automezzi e/o attrezzature idonee, eventuale custodia del materiale in locali coperti.</em></p>
+      <p><em>Il materiale fornito dal cliente dovrà essere portato al piano di lavoro a carico del committente, eventuali autorizzazioni occorrenti e spese burocratiche, fornitura di acqua ed energia elettrica.</em></p>
+      <p><em>La I.M.C. si avvale della possibilità di dare a terzi parte dei lavori ai quali per ragioni logistiche o altro non potrà assolvere con i propri mezzi.</em></p>
+      <p><em>Il preventivo ha validità 15 giorni.</em></p>
+    </div>
+
+    <!-- Footer con dati bancari -->
+    <div class="footer">
+      <div>
+        <strong>I.M.C. Srl</strong><br>
+        Via T. Bruni 23<br>
+        Francavilla al Mare (CH)<br>
+        P.IVA: 02218010698<br>
+        Cell: +39 3208498202 / 085810190
+      </div>
+      <div>
+        <strong>Banca:</strong> [Nome Banca]<br>
+        SWIFT/BIC: [SWIFT/BIC]<br>
+        IBAN: [IBAN]
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+

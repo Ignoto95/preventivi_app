@@ -1,0 +1,92 @@
+
+const express = require('express');
+const router = express.Router();
+const pool = require('../config/db');
+//const auth = require('../middlewares/auth');
+
+const {
+  authenticateFirebase,
+  authorizeRoles,
+  verifyDocumentAccess
+} = require('../middlewares');
+
+const ROLES = {
+  ADMIN: 'admin',
+  TECHNICIAN: 'technician',
+  USER: 'user'
+};
+// Middleware specifico per queste route
+router.use(authenticateFirebase);
+
+// GET recupera tutte le statistiche per la MAIN PAGE
+router.get('/statistiche',authenticateFirebase,authorizeRoles(ROLES.ADMIN), async (req, res) => {
+  const connection = await pool.getConnection();
+
+  try {
+    // Statistiche clienti
+    const [clienti] = await connection.query('SELECT COUNT(*) AS totale_clienti FROM Cliente');
+
+    // Statistiche preventivi
+    const [preventivi] = await connection.query(`
+      SELECT YEAR(data_preventivo) AS anno, COUNT(*) AS totale
+      FROM Preventivo
+      GROUP BY anno
+      ORDER BY anno DESC
+    `);
+
+    // Statistiche condizionatori
+    const [totaleCondizionatori] = await connection.query('SELECT COUNT(*) AS totale FROM condizionatori');
+
+    // Ottieni tutti i condizionatori con data installazione
+    const [condizionatori] = await connection.query('SELECT data_installazione FROM condizionatori');
+
+    // Calcola le scadenze (1 anno per tutti i condizionatori)
+    let scadute = 0;
+    let in_scadenza_30gg = 0;
+    let in_scadenza_90gg = 0;
+    let non_scadute = 0;
+
+    const oggi = new Date();
+    const oggi30 = new Date();
+    oggi30.setDate(oggi.getDate() + 30);
+    const oggi90 = new Date();
+    oggi90.setDate(oggi.getDate() + 90);
+
+    condizionatori.forEach(condizionatore => {
+      const dataInstallazione = new Date(condizionatore.data_installazione);
+      const dataScadenza = new Date(dataInstallazione);
+      dataScadenza.setFullYear(dataInstallazione.getFullYear() + 1); // Scadenza a 1 anno
+
+      // Classifica la scadenza
+      if (dataScadenza < oggi) {
+        scadute++;
+      } else if (dataScadenza <= oggi30) {
+        in_scadenza_30gg++;
+      } else if (dataScadenza <= oggi90) {
+        in_scadenza_90gg++;
+      } else {
+        non_scadute++;
+      }
+    });
+
+    res.json({
+      totaleClienti: clienti[0].totale_clienti,
+      preventiviPerAnno: preventivi,
+      totaleCondizionatori: totaleCondizionatori[0].totale,
+      condizionatoriScadenza: {
+        scadute,
+        in_scadenza_30gg,
+        in_scadenza_90gg,
+        non_scadute
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Errore nel recupero delle statistiche' });
+  } finally {
+    connection.release();
+  }
+});
+
+module.exports = router;
+

@@ -42,3 +42,25 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+
+# Backend Node.js
+backend/node_modules/
+backend/.env
+backend/*.log
+backend/npm-debug.log*
+backend/yarn-debug.log*
+backend/yarn-error.log*
+backend/dist/
+backend/.npm
+backend/.eslintcache
+
+# Frontend Flutter
+dart_tool/
+packages
+flutter-plugins
+flutter-plugins-dependencies
+pub-cache/
+pub/
+build/
+web/generated/

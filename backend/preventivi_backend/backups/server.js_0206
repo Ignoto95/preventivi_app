@@ -1,0 +1,503 @@
+const express = require('express');
+const mysql = require('mysql2');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+require('dotenv').config(); // Carica le variabili d'ambiente
+const app = express();
+const port = 3000;
+const puppeteer = require("puppeteer");
+const fs = require("fs");
+const path = require("path");
+
+
+
+// Configurazione del pool di connessione MySQL
+const pool = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+//Per caricare immagini sotto la cartella public/
+app.use('/static', express.static('public'));
+
+// Middleware
+app.use(cors({
+  origin: '*', // Permetti tutte le origini
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(bodyParser.json());
+app.use((req, res, next) => {
+  console.log(`Request URL: ${req.url}`);
+  next();
+});
+
+// Route per l'inserimento del preventivo, cliente e lavori
+app.post('/preventivo', async (req, res) => {
+  let { data_preventivo, id_cliente, prezzo_totale, acconto, lavori, rate, cliente } = req.body;
+
+  if (!cliente || !lavori || lavori.length === 0 || !data_preventivo) {
+    return res.status(400).json({ error: 'Dati mancanti: verifica di aver inserito cliente, data e lavori.' });
+  }
+
+  const { nome, cognome, citta, via, email, telefono, codice_fiscale } = cliente;
+
+  const connection = await pool.promise().getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // Verifica se il cliente esiste già tramite email o codice fiscale
+    const [existingClientRows] = await connection.query(
+      'SELECT id_cliente FROM Cliente WHERE email = ? OR codice_fiscale = ?',
+      [email, codice_fiscale]
+    );
+
+    if (existingClientRows.length > 0) {
+      // Cliente esistente, aggiorna i dati
+      id_cliente = existingClientRows[0].id_cliente;
+      await connection.query(
+        'UPDATE Cliente SET nome = ?, cognome = ?, citta = ?, via = ?, telefono = ? WHERE id_cliente = ?',
+        [nome, cognome, citta, via, telefono, id_cliente]
+      );
+    } else {
+      // Cliente nuovo, inserisci
+      const [insertClientResult] = await connection.query(
+        'INSERT INTO Cliente (nome, cognome, citta, via, email, telefono, codice_fiscale) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [nome, cognome, citta, via, email, telefono, codice_fiscale]
+      );
+      id_cliente = insertClientResult.insertId;
+    }
+
+    // Inserisci il preventivo con l’acconto (default a 0 se non passato)
+        const [insertPreventivoResult] = await connection.query(
+        'INSERT INTO Preventivo (data_preventivo, id_cliente, prezzo_totale, acconto) VALUES (?, ?, ?, ?)',
+        [data_preventivo, id_cliente, prezzo_totale || 0, acconto || 0]
+        );
+        const id_preventivo = insertPreventivoResult.insertId;
+
+    // Inserisci i lavori associati
+    for (const lavoro of lavori) {
+      const { tipo_lavoro, descrizione_lavoro, prezzo } = lavoro;
+      await connection.query(
+        'INSERT INTO Lavoro (id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo) VALUES (?, ?, ?, ?)',
+        [id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo]
+      );
+    }
+        // Inserisci le rate, se presenti
+        if (Array.isArray(rate) && rate.length > 0) {
+        for (const rata of rate) {
+                const { descrizione, percentuale } = rata;
+                if (descrizione && percentuale != null) {
+                await connection.query(
+                        'INSERT INTO rate_pagamento (id_preventivo, descrizione, percentuale) VALUES (?, ?, ?)',
+                        [id_preventivo, descrizione, percentuale]
+                );
+                }
+        }
+        }
+
+    // Ricalcola il totale se non specificato
+    if (!prezzo_totale) {
+      await connection.query(
+        'UPDATE Preventivo SET prezzo_totale = (SELECT IFNULL(SUM(prezzo), 0) FROM Lavoro WHERE id_preventivo = ?) WHERE id_preventivo = ?',
+        [id_preventivo, id_preventivo]
+      );
+    }
+
+    await connection.commit();
+    res.status(201).json({ message: 'Preventivo, cliente e lavori inseriti con successo', id_preventivo });
+  } catch (err) {
+    await connection.rollback();
+    console.error(err);
+    res.status(500).json({ error: 'Errore durante l\'inserimento del preventivo.' });
+  } finally {
+    connection.release();
+  }
+});
+
+
+// Route che recupera tutti i dati del cliente (NUOVA)
+app.get('/clienti', async (req, res) => {
+  const connection = await pool.promise().getConnection();
+  try {
+    // 1) Recupera tutti i clienti
+    const [clienti] = await connection.query(`
+      SELECT id_cliente, nome, cognome, citta, via, email, telefono, codice_fiscale
+      FROM Cliente
+    `);
+
+    // 2) Recupera tutti i preventivi
+    const [preventivi] = await connection.query(`
+      SELECT
+        id_preventivo, id_cliente, data_preventivo, prezzo_totale, acconto
+      FROM Preventivo
+    `);
+
+    // 3) Recupera tutti i lavori
+    const [lavori] = await connection.query(`
+      SELECT id_lavoro, id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo
+      FROM Lavoro
+    `);
+
+    // 4) Recupera tutte le rate
+    const [rate] = await connection.query(`
+      SELECT id_preventivo, descrizione, percentuale
+      FROM rate_pagamento
+    `);
+
+    // 5) Mappa i dati: clienti con preventivi, lavori e rate annidati
+    const clientiConPreventivi = clienti.map(cliente => {
+      const preventiviDelCliente = preventivi.filter(p => p.id_cliente === cliente.id_cliente);
+
+      return {
+        ...cliente,
+        preventivi: preventiviDelCliente.map(p => ({
+          ...p,
+          lavori: lavori.filter(l => l.id_preventivo === p.id_preventivo),
+          rate: rate.filter(r => r.id_preventivo === p.id_preventivo),
+        }))
+      };
+    });
+
+    res.status(200).json(clientiConPreventivi);
+    console.log(JSON.stringify(clientiConPreventivi, null, 2));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Errore durante il recupero dei clienti con preventivi' });
+  } finally {
+    connection.release();
+  }
+});
+
+
+
+// Route per aggiornare un preventivo e i suoi lavori
+app.put('/preventivi/modifica', async (req, res) => {
+  const {
+    id_preventivo,
+    nome_cliente,
+    cognome_cliente,
+    via,
+    citta,
+    prezzo_totale,
+    data_preventivo,
+    lavori,
+    email,
+    telefono,
+    codice_fiscale,
+    acconto,
+    rate // Array di oggetti: [{ descrizione, percentuale }]
+  } = req.body;
+
+  if (
+    !id_preventivo ||
+    !nome_cliente ||
+    !cognome_cliente ||
+    !data_preventivo ||
+    !Array.isArray(lavori)
+  ) {
+    return res.status(400).json({ error: 'Dati mancanti o non validi.' });
+  }
+
+  const connection = await pool.promise().getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // 1. Trova il cliente associato al preventivo
+    const [clienteRows] = await connection.query(
+      `SELECT Cliente.id_cliente FROM Cliente
+       INNER JOIN Preventivo ON Cliente.id_cliente = Preventivo.id_cliente
+       WHERE Preventivo.id_preventivo = ?`,
+      [id_preventivo]
+    );
+
+    if (clienteRows.length === 0) {
+      throw new Error('Cliente associato al preventivo non trovato.');
+    }
+
+    const id_cliente = clienteRows[0].id_cliente;
+
+    // 2. Aggiorna dati cliente
+    await connection.query(
+      `UPDATE Cliente
+       SET nome = ?, cognome = ?, via = ?, citta = ?, email = ?, telefono = ?, codice_fiscale = ?
+       WHERE id_cliente = ?`,
+      [nome_cliente, cognome_cliente, via, citta, email || null, telefono || null, codice_fiscale || null, id_cliente]
+    );
+
+    // 3. Aggiorna dati preventivo
+    await connection.query(
+      `UPDATE Preventivo
+       SET data_preventivo = ?, prezzo_totale = ?, acconto = ?
+       WHERE id_preventivo = ?`,
+      [data_preventivo, prezzo_totale, acconto || 0, id_preventivo]
+    );
+
+    // 4. Elimina lavori esistenti
+    await connection.query(`DELETE FROM Lavoro WHERE id_preventivo = ?`, [id_preventivo]);
+
+    // 5. Inserisci nuovi lavori
+    for (const lavoro of lavori) {
+      const { tipo_lavoro, descrizione_lavoro, prezzo } = lavoro;
+      await connection.query(
+        `INSERT INTO Lavoro (id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo) VALUES (?, ?, ?, ?)`,
+        [id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo]
+      );
+    }
+
+    // 6. Elimina rate esistenti
+    await connection.query(`DELETE FROM rate_pagamento WHERE id_preventivo = ?`, [id_preventivo]);
+
+    // 7. Inserisci nuove rate
+    if (Array.isArray(rate)) {
+      for (const r of rate) {
+        const { descrizione, percentuale } = r;
+        if (descrizione && percentuale != null) {
+          await connection.query(
+            `INSERT INTO rate_pagamento (id_preventivo, descrizione, percentuale) VALUES (?, ?, ?)`,
+            [id_preventivo, descrizione, percentuale]
+          );
+        }
+      }
+    }
+
+    await connection.commit();
+    res.status(200).json({ message: 'Preventivo aggiornato con successo' });
+  } catch (err) {
+    await connection.rollback();
+    console.error(err);
+    res.status(500).json({ error: 'Errore durante la modifica del preventivo.' });
+  } finally {
+    connection.release();
+  }
+});
+
+
+
+// Route per generare il PDF
+app.post("/generate-pdf/preventivo/:id", async (req, res) => {
+  console.log("✅ Chiamata ricevuta a /generate-pdf/preventivo/:id");
+
+  const {
+    nome_cliente,
+    cognome_cliente,
+    email,
+    telefono,
+    lavori,
+    citta,
+    via,
+    codice_fiscale,
+    data_preventivo,
+    prezzo_totale,
+    id_preventivo,
+        rate
+  } = req.body;
+
+  if (!Array.isArray(lavori)) {
+    return res.status(400).json({ error: "Campo 'lavori' mancante o non valido" });
+  }
+
+const lavoriHtml = lavori.map(l =>
+  `<tr>
+    <td>
+      <span style="font-weight: bold; font-size: 14px;">${l.tipo_lavoro}</span><br>
+      <span style="font-weight: normal; font-size: 12px;">${l.descrizione_lavoro}</span>
+    </td>
+    <td>€ ${l.prezzo}</td>
+  </tr>`
+).join("");
+
+let rateHtml = "";
+
+if (Array.isArray(rate) && rate.length > 0) {
+  rateHtml = rate.map(r =>
+    `<li><strong>${r.descrizione}:</strong> ${r.percentuale}%</li>`
+  ).join("");
+}
+  // 🔄 Calcolo della data di scadenza (+1 giorno)
+  const dataObj = new Date(data_preventivo);
+  const dataScadenzaObj = new Date(dataObj);
+  dataScadenzaObj.setDate(dataObj.getDate() + 15);
+
+  // 🔠 Formattazione date in DD/MM/YYYY
+  const formatDate = (d) =>
+    `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+
+  const dataPreventivoFormatted = formatDate(dataObj);
+  const dataScadenzaFormatted = formatDate(dataScadenzaObj);
+
+  // Carica template HTML
+  const templatePath = path.join(__dirname, "templates", "preventivo.html");
+  let html = fs.readFileSync(templatePath, "utf-8");
+  console.log("✅ Template HTML caricato");
+
+  // Carica e codifica il logo
+  const imagePath = path.resolve(__dirname, "public", "images", "logo_az_simone.png");
+  let logoBase64 = "";
+
+  try {
+    const imageBuffer = fs.readFileSync(imagePath);
+    logoBase64 = `data:image/png;base64,${imageBuffer.toString("base64")}`;
+    console.log("🖼️ Logo convertito in Base64");
+  } catch (err) {
+    console.error("❌ Errore nella lettura/conversione dell'immagine:", err);
+  }
+
+  // Sostituisci i placeholder
+  html = html.replace(/{{logo_path}}/g, logoBase64)
+             .replace(/{{nome_cliente}}/g, nome_cliente)
+             .replace(/{{cognome_cliente}}/g, cognome_cliente)
+             .replace(/{{email}}/g, email)
+             .replace(/{{telefono}}/g, telefono)
+             .replace(/{{citta}}/g, citta)
+             .replace(/{{via}}/g, via)
+             .replace(/{{codice_fiscale}}/g, codice_fiscale)
+             .replace(/{{data_preventivo}}/g, dataPreventivoFormatted)
+             .replace(/{{data_scadenza}}/g, dataScadenzaFormatted)
+             .replace(/{{prezzo_totale}}/g, prezzo_totale)
+             .replace(/{{lavori}}/g, lavoriHtml)
+             .replace(/{{rate}}/g, rateHtml)
+                         .replace(/{{id_preventivo}}/g, id_preventivo);
+
+  console.log("🧩 Template HTML compilato con i dati");
+
+  try {
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
+
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: "networkidle0" });
+
+    const pdfBuffer = await page.pdf({ format: "A4" });
+    await browser.close();
+
+    const fileName = `Preventivo.${nome_cliente}.${cognome_cliente}.pdf`.replace(/\s+/g, "_");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+    res.end(pdfBuffer);
+
+  } catch (err) {
+    console.error("❌ Errore durante la generazione del PDF:", err);
+    res.status(500).send("Errore durante la generazione del PDF");
+  }
+});
+
+
+
+//Route per eliminare un preventivo
+app.delete('/preventivo/:id', async (req, res) => {
+  const id_preventivo = req.params.id;
+  const connection = await pool.promise().getConnection();
+
+  try {
+    console.log('Inizio eliminazione preventivo ID:', id_preventivo);
+    await connection.beginTransaction();
+
+    const [clienteRows] = await connection.query(
+      'SELECT id_cliente FROM Preventivo WHERE id_preventivo = ?',
+      [id_preventivo]
+    );
+
+    if (clienteRows.length === 0) {
+      console.log('Preventivo non trovato');
+      return res.status(404).json({ error: 'Preventivo non trovato' });
+    }
+
+    const id_cliente = clienteRows[0].id_cliente;
+    console.log('ID cliente collegato:', id_cliente);
+
+    // Elimina le rate associate
+    await connection.query('DELETE FROM rate_pagamento WHERE id_preventivo = ?', [id_preventivo]);
+    console.log('Rate eliminate');
+
+    // Elimina i lavori associati
+    await connection.query('DELETE FROM Lavoro WHERE id_preventivo = ?', [id_preventivo]);
+    console.log('Lavori eliminati');
+
+    // Elimina il preventivo
+    await connection.query('DELETE FROM Preventivo WHERE id_preventivo = ?', [id_preventivo]);
+    console.log('Preventivo eliminato');
+
+    // Se il cliente non ha altri preventivi, eliminalo
+    const [altriPreventivi] = await connection.query(
+      'SELECT COUNT(*) AS count FROM Preventivo WHERE id_cliente = ?',
+      [id_cliente]
+    );
+
+    if (altriPreventivi[0].count === 0) {
+      await connection.query('DELETE FROM Cliente WHERE id_cliente = ?', [id_cliente]);
+      console.log('Cliente eliminato (nessun altro preventivo)');
+    }
+
+    await connection.commit();
+    res.status(200).json({ message: 'Preventivo eliminato con successo' });
+  } catch (err) {
+    await connection.rollback();
+    console.error('Errore eliminazione:', err);
+    res.status(500).json({ error: 'Errore durante l\'eliminazione del preventivo' });
+  } finally {
+    connection.release();
+  }
+});
+
+//Route per salvare i documenti nel cliente
+app.post('/api/documenti', (req, res) => {
+  const {
+    id_cliente,
+    esecutrice_impianto,
+    norma_tecnica_applicabile,
+    testo_norma_tecnica_impiego,
+    verificato_compatibilita,
+    progetto_art_5_7,
+    tipologia_materiali_utilizzati,
+    schema_impianto,
+    riferimento_dichiarazioni,
+    copia_certificato_riconoscimento,
+    attestazione_conformita
+  } = req.body;
+
+  const query = `
+    INSERT INTO dichiarazione_conformita (
+      id_cliente, esecutrice_impianto, norma_tecnica_applicabile, testo_norma_tecnica_impiego,
+      verificato_compatibilita, progetto_art_5_7, tipologia_materiali_utilizzati, schema_impianto,
+      riferimento_dichiarazioni, copia_certificato_riconoscimento, attestazione_conformita
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+
+  connection.query(query, [
+    id_cliente,
+    esecutrice_impianto,
+    norma_tecnica_applicabile ? 1 : 0,
+    testo_norma_tecnica_impiego,
+    verificato_compatibilita ? 1 : 0,
+    progetto_art_5_7 ? 1 : 0,
+    tipologia_materiali_utilizzati ? 1 : 0,
+    schema_impianto ? 1 : 0,
+    riferimento_dichiarazioni ? 1 : 0,
+    copia_certificato_riconoscimento ? 1 : 0,
+    attestazione_conformita ? 1 : 0
+  ], (err, results) => {
+    if (err) {
+      console.error('Errore nel salvataggio:', err);
+      return res.status(500).send('Errore nel salvataggio');
+    }
+    res.status(201).send({ message: 'Documento salvato con successo' });
+  });
+});
+
+// Avvia il server
+app.listen(port, () => {
+  console.log(`Server in ascolto sulla porta ${port}`);
+});
+
+
+

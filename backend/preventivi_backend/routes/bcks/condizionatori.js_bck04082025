@@ -1,0 +1,335 @@
+const express = require('express');
+const router = express.Router();
+const pool = require('../config/db');
+const auth = require('../middlewares/auth');
+
+const nodemailer = require('nodemailer');
+const emailTemplate = fs.readFileSync(
+  path.join(__dirname, 'templates/reminder_condizionatore.html'),
+  'utf8'
+);
+
+// Configura il transporter
+const mailTransporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PWD
+  }
+});
+// Verifica connessione SMTP all'avvio
+mailTransporter.verify((error) => {
+  if (error) {
+        console.error('Errore connessione SMTP:', error);
+  } else {
+        console.log('Server SMTP pronto');
+  }
+});
+
+const TEMPLATE_PATH = '/preventivi_backend/templates/reminder_condizionatore.html';
+
+// Middleware specifico per queste route
+router.use(auth.verifyToken);
+
+// Endpoint per download modelli vuoti
+router.get('/modello-vuoto/:tipo', async (req, res) => {
+  const tipo = req.params.tipo;
+  const { nome, cognome } = req.query; // Ricevi nome e cognome come query params
+
+  // Verifica che il tipo sia valido
+  const tipiAllegatiValidi = ['modulo_a12', 'relazione_materiali', 'relazione_verifica'];
+  if (!tipiAllegatiValidi.includes(tipo)) {
+    return res.status(400).json({ error: 'Tipo allegato non valido' });
+  }
+
+  const fileName = MODELLI[tipo];
+  if (!fileName) {
+    return res.status(404).json({ error: 'Modello non trovato' });
+  }
+
+  const filePath = path.join(__dirname, 'public', 'modelli', fileName);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'File non trovato' });
+  }
+
+  // Crea il nuovo nome file secondo la naming convention
+  const fileExtension = path.extname(fileName);
+  let newFileName;
+
+  if (nome && cognome) {
+    newFileName = `${tipo}_${nome}_${cognome}${fileExtension}`;
+  } else {
+    // Fallback se nome/cognome non sono forniti
+    newFileName = `${tipo}_template${fileExtension}`;
+  }
+
+  res.download(filePath, newFileName, (err) => {
+    if (err) {
+      console.error('Download error:', err);
+      res.status(500).json({ error: 'Errore durante il download' });
+    }
+  });
+});
+
+// POST Endpoint per UPLOAD documenti compilati
+router.post('/:tipo_documento/:id_documento/upload', upload.single('documento'), async (req, res) => {
+  console.log('Richiesta upload ricevuta:', {
+    params: req.params,
+    body: req.body,
+    file: req.file
+  });
+
+  let connection;
+  try {
+    if (!req.file) {
+      console.log('Nessun file ricevuto nella richiesta');
+      return res.status(400).json({ error: 'Nessun file caricato' });
+    }
+
+    console.log('File ricevuto:', {
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      path: req.file.path
+    });
+
+    const { id_documento, tipo_documento } = req.params;
+    const { tipo_allegato } = req.body;
+
+    // Verifiche di validità
+    if (!['conformita', 'rispondenza'].includes(tipo_documento)) {
+      return res.status(400).json({ error: 'Tipo documento non valido' });
+    }
+
+    const tipiAllegatiValidi = ['modulo_a12', 'relazione_materiali', 'relazione_verifica'];
+    if (!tipiAllegatiValidi.includes(tipo_allegato)) {
+      return res.status(400).json({ error: 'Tipo allegato non valido' });
+    }
+
+    connection = await pool.getConnection();
+
+    // Verifica esistenza documento padre
+    const tableName = tipo_documento === 'conformita'
+      ? 'dichiarazione_conformita'
+      : 'dichiarazione_rispondenza';
+
+    const [documento] = await connection.query(
+      `SELECT 1 FROM ${tableName} WHERE id_documento = ?`,
+      [id_documento]
+    );
+
+    if (documento.length === 0) {
+      return res.status(404).json({ error: 'Documento non trovato' });
+    }
+
+    // Prepara i dati per l'inserimento
+    const insertData = {
+      tipo_allegato,
+      file_path: req.file.path,
+      dimensione_file: req.file.size
+    };
+
+    // Imposta l'ID corretto in base al tipo di documento
+    if (tipo_documento === 'conformita') {
+      insertData.id_conformita = id_documento;
+      insertData.id_rispondenza = null;
+    } else {
+      insertData.id_rispondenza = id_documento;
+      insertData.id_conformita = null;
+    }
+
+    // Inserisci l'allegato con i campi necessari
+    const [result] = await connection.query(
+      `INSERT INTO documenti_allegati SET ?`,
+      [insertData]
+    );
+
+    res.json({
+      success: true,
+      message: 'Documento caricato con successo',
+      tipo_allegato,
+      id_documento,
+      id_allegato: result.insertId,
+      fileInfo: {
+        path: req.file.path,
+        name: req.file.filename,
+        size: req.file.size,
+        type: req.file.mimetype
+      }
+    });
+
+  } catch (error) {
+    console.error('Upload error:', {
+      message: error.message,
+      stack: error.stack,
+      fullError: error
+    });
+    res.status(500).json({
+      error: 'Errore durante il caricamento del documento',
+      details: error.message
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// GET Endpoint per DOWNLOAD documenti COMPILATI
+router.get('/:tipo_documento/:id_documento/download/:tipo_allegato', async (req, res) => {
+  let connection;
+  try {
+    const { id_documento, tipo_documento, tipo_allegato } = req.params;
+
+    // Verifiche di validità
+    if (!['conformita', 'rispondenza'].includes(tipo_documento)) {
+      return res.status(400).json({ error: 'Tipo documento non valido' });
+    }
+
+    connection = await pool.getConnection();
+
+    // Recupera direttamente dalla tabella documenti_allegati
+  const [allegato] = await connection.query(`
+    SELECT file_path
+    FROM documenti_allegati
+    WHERE ${tipo_documento === 'conformita' ? 'id_conformita' : 'id_rispondenza'} = ?
+      AND tipo_allegato = ?
+  `, [id_documento, tipo_allegato]);
+
+    if (allegato.length === 0) {
+      return res.status(404).json({ error: 'Allegato non trovato' });
+    }
+
+    const filePath = allegato[0].file_path;
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'File non trovato sul server' });
+    }
+
+    const fileName = `${tipo_allegato}_${id_documento}${path.extname(filePath)}`;
+
+    res.download(filePath, fileName, (err) => {
+      if (err) {
+        console.error('Download error:', err);
+        res.status(500).json({ error: 'Errore durante il download' });
+      }
+    });
+
+  } catch (error) {
+    console.error('Download error:', error);
+    res.status(500).json({ error: 'Errore durante il recupero del documento' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Endpoint per VERIFICARE presenza allegati
+router.get('/:tipo_documento/:id_documento/allegati', async (req, res) => {
+  try {
+    const { id_documento, tipo_documento } = req.params;
+
+    // Recupera tutti gli allegati per il documento
+  const [allegati] = await pool.query(
+    `SELECT tipo_allegato, data_caricamento, dimensione_file
+     FROM documenti_allegati
+     WHERE ${tipo_documento === 'conformita' ? 'id_conformita' : 'id_rispondenza'} = ?`,
+    [id_documento]
+  );
+
+    // Formatta la risposta
+    const result = {
+      has_modulo_a12: false,
+      has_relazione_materiali: false,
+      has_relazione_verifica: false,
+      allegati_details: {}
+    };
+
+    allegati.forEach(allegato => {
+      result[`has_${allegato.tipo_allegato}`] = true;
+      result.allegati_details[allegato.tipo_allegato] = {
+        data_caricamento: allegato.data_caricamento,
+        dimensione_file: allegato.dimensione_file
+      };
+    });
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('Error checking attachments:', error);
+    res.status(500).json({ error: 'Errore durante il recupero degli allegati' });
+  }
+});
+
+// DELETE per ELIMINARE un singolo allegato
+router.delete('/:tipo_documento/:id_documento/delete-allegato/:tipo_allegato', async (req, res) => {
+  let connection;
+  try {
+    const { id_documento, tipo_documento, tipo_allegato } = req.params;
+
+    // Verifiche di validità
+    if (!['conformita', 'rispondenza'].includes(tipo_documento)) {
+      return res.status(400).json({ error: 'Tipo documento non valido' });
+    }
+
+    const tipiAllegatiValidi = ['modulo_a12', 'relazione_materiali', 'relazione_verifica'];
+    if (!tipiAllegatiValidi.includes(tipo_allegato)) {
+      return res.status(400).json({ error: 'Tipo allegato non valido' });
+    }
+
+    connection = await pool.getConnection();
+
+    // 1. Trova l'allegato specifico da eliminare
+    const [allegato] = await connection.query(
+      `SELECT id_allegato, file_path
+       FROM documenti_allegati
+       WHERE ${tipo_documento === 'conformita' ? 'id_conformita' : 'id_rispondenza'} = ?
+       AND tipo_allegato = ?`,
+      [id_documento, tipo_allegato]
+    );
+
+    if (allegato.length === 0) {
+      return res.status(404).json({ error: 'Allegato non trovato' });
+    }
+
+    const filePath = allegato[0].file_path;
+    const id_allegato = allegato[0].id_allegato;
+
+    // 2. Elimina il file fisicamente (se esiste)
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.log(`File eliminato: ${filePath}`);
+      }
+    } catch (err) {
+      console.error('Errore eliminazione file:', err);
+      // Procedi comunque con l'eliminazione dal DB
+    }
+
+    // 3. Elimina il record dal database
+    await connection.query(
+      `DELETE FROM documenti_allegati WHERE id_allegato = ?`,
+      [id_allegato]
+    );
+
+    res.json({
+      success: true,
+      message: 'Allegato eliminato con successo',
+      deleted: {
+        id_allegato: id_allegato,
+        tipo_allegato: tipo_allegato,
+        file_path: filePath
+      }
+    });
+
+  } catch (error) {
+    console.error('Errore eliminazione allegato:', error);
+    res.status(500).json({
+      error: 'Errore durante l\'eliminazione dell\'allegato',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+
+
+module.exports = router;

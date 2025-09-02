@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Preventivo Cliente</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px;
+      background-color: #ffffff;
+      color: #333;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 30px;
+    }
+
+    .logo {
+      width: 180px;
+    }
+
+    .azienda {
+      text-align: right;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .azienda strong:first-child {
+      font-size: 20px;
+      color: #1a90ff;
+    }
+
+    h2, h3 {
+      color: #1a90ff;
+      margin-bottom: 10px;
+    }
+
+    .cliente, .dettagli, .note {
+      margin-top: 30px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #e6f3ff;
+      color: #1a90ff;
+    }
+
+    .totale {
+      text-align: right;
+      font-size: 16px;
+      font-weight: bold;
+      margin-top: 15px;
+    }
+
+    .note p {
+      font-size: 10px; /* più piccola */
+      line-height: 1.5;
+      margin: 4px 0;
+    }
+
+    .section {
+      background-color: #f9f9f9;
+      padding: 15px;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo">
+      <img src="/preventivi_backend/public/images/logo_az_simone.png" alt="Logo I.M.C." style="width: 150px;">
+    </div>
+    <div class="azienda">
+      <p><strong>I.M.C. Srl</strong></p>
+      <p>Via T. Bruni 23<br>Francavilla al Mare (CH)</p>
+      <p><strong>P. IVA:</strong> 02218010698</p>
+      <p><strong>Cell:</strong> +39 3208498202 / </strong> 085810190</p>
+    </div>
+  </div>
+
+  <div class="cliente section">
+    <h3>Dati Cliente</h3>
+    <p><strong>Nome:</strong> {{nome}} {{cognome}}</p>
+    <p><strong>Città:</strong> {{citta}}</p>
+    <p><strong>Via:</strong> {{via}}</p>
+	<p><strong>Telefono </strong> {{telefono}}</p>
+	<p><strong>CF/P.IVA:</strong> {{codice_fiscale}}</p>
+	<p><strong>Email </strong> {{email}}</p>
+    <p><strong>Data Preventivo:</strong> {{data_preventivo}}</p>
+  </div>
+
+  <div class="dettagli section">
+    <h3>Dettaglio Lavori</h3>
+<tbody>
+{{lavori}}
+</tbody>
+    <p class="totale">Totale: {{totale}} €</p>
+    <p><strong>Acconto inizio lavori 30% - Acconto fine demolizioni 30% - Acconto fine impianti 30% - Saldo fine lavori 10%</strong></p>
+  </div>
+
+  <div class="note section">
+    <h3>Note e Condizioni</h3>
+    <p><em>Variazioni o modifiche non previste nel preventivo saranno valutate e concordate in corso d’opera ed eventuali conguagli verranno corrisposti a S.A.L.</em></p>
+    <p><em>Al ritardo dei pagamenti a S.A.L. la I.M.C. si riserva il diritto di interrompere i lavori e di riprenderli a pagamento avvenuto.</em></p>
+    <p><em>Se per motivi non imputabili dalla I.M.C. i lavori non potranno essere portati a termine, la parte committente si impegnerà a versare a saldo l’intera somma detratta dei lavori non ultimati, che saranno conteggiati come lavori in economia.</em></p>
+    <p><em>I prezzi della manodopera sono esenti da IVA ai sensi dell’art.1 commi 9 e 11, della Legge 30/12/18 n°145.</em></p>
+    <p><em>Oneri a carico del committente: accesso e agibilità nelle aree interessate con automezzi e/o attrezzature idonee, eventuale custodia del materiale in locali coperti.</em></p>
+    <p><em>Il materiale fornito dal cliente dovrà essere portato al piano di lavoro a carico del committente, eventuali autorizzazioni occorrenti e spese burocratiche, fornitura di acqua ed energia elettrica.</em></p>
+    <p><em>La I.M.C. si avvale della possibilità di dare a terzi parte dei lavori ai quali per ragioni logistiche o altro non potrà assolvere con i propri mezzi.</em></p>
+    <p><em>Il preventivo ha validità 15 giorni.</em></p>
+  </div>
+
+</body>
+</html>
+

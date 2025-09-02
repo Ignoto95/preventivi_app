@@ -1,0 +1,68 @@
+const path = require('path');
+const express = require('express');
+const bodyParser = require('body-parser');
+const morgan = require('morgan');
+const admin = require('firebase-admin');
+
+if (!admin.apps.length) {
+  try {
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') // Fix per i newline
+      })
+    });
+    console.log('Firebase Admin inizializzato correttamente');
+  } catch (error) {
+    console.error('Errore inizializzazione Firebase:', error);
+    process.exit(1); // Termina l'app se Firebase non si inizializza
+  }
+}
+
+const authenticateFirebase = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Token non fornito o malformato' });
+  }
+
+  const idToken = authHeader.split(' ')[1];
+
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      email_verified: decodedToken.email_verified,
+      role: decodedToken.role || 'user' // Custom claim opzionale
+    };
+    next();
+  } catch (error) {
+    console.error('Errore verifica token:', error.message);
+    return res.status(403).json({ 
+      error: 'Accesso non autorizzato',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+const authorizeRole = (allowedRoles) => (req, res, next) => {
+  if (!req.user?.role || !allowedRoles.includes(req.user.role)) {
+    return res.status(403).json({
+      error: 'Ruolo non autorizzato',
+      requiredRoles: allowedRoles
+    });
+  }
+  next();
+};
+
+module.exports = {
+  authenticateFirebase,
+  staticFiles: (app) => {
+    app.use('/static', express.static(path.join(__dirname, '../public')));
+    app.use('/modelli', express.static(path.join(__dirname, '../public/modelli')));
+    app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+  }
+};
+

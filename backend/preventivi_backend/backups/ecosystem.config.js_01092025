@@ -1,0 +1,25 @@
+// /preventivi_backend/ecosystem.config.js
+require('dotenv').config(); // Carica le variabili dal .env
+
+module.exports = {
+  apps: [{
+    name: 'imc-backend',
+    script: 'server.js',
+    instances: 1,
+    env: {
+      NODE_ENV: 'production',
+      PORT: 3000,
+      FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID,
+      FIREBASE_CLIENT_EMAIL: process.env.FIREBASE_CLIENT_EMAIL,
+      FIREBASE_PRIVATE_KEY: process.env.FIREBASE_PRIVATE_KEY,
+      DB_HOST: process.env.DB_HOST,
+      DB_USER: process.env.DB_USER,
+      DB_PASSWORD: process.env.DB_PASSWORD,
+      DB_NAME: process.env.DB_NAME
+    },
+    error_file: 'logs/err.log',
+    out_file: 'logs/out.log',
+    log_file: 'logs/combined.log',
+    time: true
+  }]
+};

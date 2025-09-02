@@ -1,0 +1,211 @@
+const express = require('express');
+const router = express.Router();
+const pool = require('../config/db');
+const fs = require('fs'); 
+//const auth = require('../middlewares/auth');
+const path = require("path");
+const {
+  authenticateFirebase,
+  authorizeRoles,
+  verifyDocumentAccess
+} = require('../middlewares');
+
+const ROLES = {
+  ADMIN: 'admin',
+  TECHNICIAN: 'technician',
+  USER: 'user'
+};
+const nodemailer = require('nodemailer');
+const emailTemplate = fs.readFileSync(
+	templatePath = path.join(__dirname, '../templates/reminder_condizionatore.html');
+	'utf8'
+);
+
+// Configura il transporter
+const mailTransporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PWD
+  }
+});
+// Verifica connessione SMTP all'avvio
+mailTransporter.verify((error) => {
+  if (error) {
+        console.error('Errore connessione SMTP:', error);
+  } else {
+        console.log('Server SMTP pronto');
+  }
+});
+
+const TEMPLATE_PATH = '/preventivi_backend/templates/reminder_condizionatore.html';
+
+// Middleware specifico per queste route
+router.use(authenticateFirebase);
+
+// Route per ottenere tutti i clienti con i loro condizionatori
+router.get('/api/clienti-condizionatori',authorizeRoles(ROLES.ADMIN), async (req, res) => {
+    let connection;
+    try {
+        connection = await pool.getConnection();
+
+        const query = `
+            SELECT
+                c.id_cliente,
+                c.nome,
+                c.cognome,
+                c.citta,
+                c.via,
+                c.email,
+                c.telefono,
+                c.codice_fiscale,
+                co.id_condizionatore,
+                co.tipo_condizionatore,
+                co.potenza,
+                co.data_installazione,
+                co.modello,
+                co.marca,
+                DATE_ADD(co.data_installazione, INTERVAL 1 YEAR) as data_scadenza
+            FROM Cliente c
+            INNER JOIN condizionatori co ON c.id_cliente = co.id_cliente
+            ORDER BY c.cognome, c.nome
+        `;
+        const [results] = await connection.query(query);
+        res.json(results);
+    } catch (error) {
+        console.error('Errore nel recupero dei clienti con condizionatori:', error);
+        res.status(500).json({ error: 'Errore del server' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Route per aggiungere un nuovo condizionatore
+router.post('/api/condizionatori',authorizeRoles(ROLES.ADMIN), async (req, res) => {
+    let connection;
+    try {
+        const { id_cliente, tipo_condizionatore, potenza, data_installazione, modello, marca } = req.body;
+
+        if (!id_cliente || !tipo_condizionatore || !potenza || !data_installazione) {
+            return res.status(400).json({ error: 'Tutti i campi obbligatori sono richiesti' });
+        }
+
+        connection = await pool.getConnection();
+
+        const query = `
+            INSERT INTO condizionatori
+            (id_cliente, tipo_condizionatore, potenza, data_installazione, modello, marca)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `;
+        const [result] = await connection.query(query, [
+            id_cliente,
+            tipo_condizionatore,
+            potenza,
+            data_installazione,
+            modello || null,
+            marca || null
+        ]);
+
+        // Recupera il condizionatore appena inserito con la data di scadenza calcolata
+        const [condizionatore] = await connection.query(`
+            SELECT *,
+                   DATE_ADD(data_installazione, INTERVAL 1 YEAR) as data_scadenza
+            FROM condizionatori
+            WHERE id_condizionatore = ?
+        `, [result.insertId]);
+
+        res.status(201).json(condizionatore[0]);
+    } catch (error) {
+        console.error('Errore nell\'inserimento del condizionatore:', error);
+        res.status(500).json({ error: 'Errore del server' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+router.delete('/api/condizionatori/:id',authorizeRoles(ROLES.ADMIN), async (req, res) => {
+    const { id } = req.params;
+    const connection = await pool.getConnection();
+
+    try {
+        // Verifica che il condizionatore esista
+        const [rows] = await connection.query(
+            'SELECT * FROM condizionatori WHERE id_condizionatore = ?',
+            [id]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ error: 'Condizionatore non trovato' });
+        }
+
+        // Elimina il condizionatore
+        const [result] = await connection.query(
+            'DELETE FROM condizionatori WHERE id_condizionatore = ?',
+            [id]
+        );
+
+        res.status(200).json({ message: 'Condizionatore eliminato con successo' });
+    } catch (err) {
+        console.error('Errore eliminazione condizionatore:', err);
+        res.status(500).json({ error: 'Errore del server' });
+    } finally {
+        connection.release();
+    }
+});
+
+// Route per inviare avviso revisione condizionatore
+router.post('/condizionatori/invia-avviso',authorizeRoles(ROLES.ADMIN), async (req, res) => {
+    const { recipientEmail, condizionatoreId, clientName } = req.body;
+
+    try {
+        // 1. Verifica parametri obbligatori
+        if (!recipientEmail || !condizionatoreId || !clientName) {
+            throw new Error('Parametri mancanti');
+        }
+
+        // 2. Carica template
+        const emailTemplate = fs.readFileSync(
+            '/preventivi_backend/templates/reminder_condizionatore.html',
+            'utf8'
+        );
+
+        // 3. Compila template
+        const compiledHtml = emailTemplate
+            .replace(/\${clientName}/g, clientName)
+            .replace(/\${condizionatoreId}/g, condizionatoreId);
+
+        // 4. Configura email
+        const mailOptions = {
+            from: '"IMC Impianti" <impiantiimc@gmail.com>',
+            to: recipientEmail,
+            subject: `🔔 Avviso revisione condizionatore ${condizionatoreId}`,
+            html: compiledHtml,
+            text: `Gentile ${clientName},\n\nLa revisione per il suo condizionatore (ID: ${condizionatoreId}) è in programma.\n\nCordiali saluti,\nIMC Impianti`,
+            attachments: [{
+                filename: 'logo-imc.png',
+                path: '/preventivi_backend/public/images/logo_az_simone.png',
+                cid: 'company-logo'
+            }]
+        };
+
+        // 5. Invia email
+        const info = await mailTransporter.sendMail(mailOptions);
+
+        console.log(`Email inviata a ${recipientEmail}`, info.messageId);
+        res.json({
+            success: true,
+            messageId: info.messageId
+        });
+
+    } catch (error) {
+        console.error('Errore invio email:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message || 'Errore durante l\'invio dell\'email'
+        });
+    }
+});
+
+
+module.exports = router;
+

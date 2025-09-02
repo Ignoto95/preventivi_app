@@ -1,0 +1,65 @@
+const path = require('path');
+const express = require('express');
+const bodyParser = require('body-parser');
+const morgan = require('morgan');
+const admin = require('firebase-admin');
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+    })
+  });
+}
+
+const authenticateFirebase = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Token non fornito' });
+  }
+
+  const idToken = authHeader.split('Bearer ')[1];
+
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      role: decodedToken.role // Puoi aggiungere custom claims
+    };
+    next();
+  } catch (error) {
+    console.error('Error verifying token:', error);
+    res.status(403).json({ error: 'Token non valido' });
+  }
+};
+
+module.exports = { authenticateFirebase };
+module.exports = (app) => {
+  // Middleware di logging
+  app.use(morgan('dev'));
+  
+  // Body parsing
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
+  app.use(bodyParser.json());
+  
+  // Middleware personalizzato per log delle richieste
+  app.use((req, res, next) => {
+    console.log(`Request URL: ${req.url}`);
+    next();
+  });
+  
+  // Configurazione file statici
+  app.use('/static', express.static(path.join(__dirname, '../public')));
+  app.use('/modelli', express.static(path.join(__dirname, '../public/modelli')));
+  
+  // File caricati
+  app.use('/uploads/documenti/conformita', 
+    express.static(path.join(__dirname, '../uploads/documenti/conformita')));
+  app.use('/uploads/documenti/rispondenza', 
+    express.static(path.join(__dirname, '../uploads/documenti/rispondenza')));
+};

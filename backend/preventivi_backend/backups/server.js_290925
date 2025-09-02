@@ -1,0 +1,1912 @@
+const express = require('express');
+//const mysql = require('mysql2');
+const mysql = require('mysql2/promise');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+const app = express();
+const port = 3000;
+const puppeteer = require("puppeteer");
+const fs = require("fs");
+const path = require("path");
+const { PDFDocument } = require('pdf-lib');
+const nodemailer = require('nodemailer');
+require('dotenv').config(); // Carica le variabili d'ambiente
+const emailTemplate = fs.readFileSync(
+  path.join(__dirname, 'templates/reminder_condizionatore.html'),
+  'utf8'
+);
+
+// Configura il transporter
+const mailTransporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+	user: process.env.GMAIL_USER,
+	pass: process.env.GMAIL_APP_PWD
+  }
+});
+// Verifica connessione SMTP all'avvio
+mailTransporter.verify((error) => {
+  if (error) {
+	console.error('Errore connessione SMTP:', error);
+  } else {
+	console.log('Server SMTP pronto');
+  }
+});
+
+const TEMPLATE_PATH = '/preventivi_backend/templates/reminder_caldaia.html';
+// Configurazione del pool di connessione MySQL
+const pool = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
+const MODELLI = {
+  'modulo_a12': 'modulo_a12.pdf',
+  'relazione_materiali': 'relazione_materiali.pdf',
+  'relazione_verifica': 'relazione_verifica.pdf'
+};
+
+const TIPI_DOCUMENTO = ['conformita', 'rispondenza'];
+const TIPI_ALLEGATO = ['modulo_a12', 'relazione_materiali', 'relazione_verifica'];
+
+const multer = require('multer');
+
+// Configura Multer per il salvataggio dei file
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+	const { id_documento, tipo_documento } = req.params;
+	const uploadPath = path.join(__dirname, 'uploads', 'documenti', tipo_documento, id_documento);
+	console.log('Percorso upload:', uploadPath);
+	
+	// Crea la cartella se non esiste
+	if (!fs.existsSync(uploadPath)) {
+	  fs.mkdirSync(uploadPath, { recursive: true });
+	}
+	
+	cb(null, uploadPath);
+  },
+  filename: (req, file, cb) => {
+	const { tipo_allegato } = req.body;
+	const ext = path.extname(file.originalname);
+	const timestamp = Date.now();
+	const fileName = `${tipo_allegato}_${timestamp}${ext}`;
+	cb(null, fileName);
+  }
+});
+
+
+const fileFilter = (req, file, cb) => {
+  console.log('File ricevuto:', {
+    originalname: file.originalname,
+    mimetype: file.mimetype,
+    size: file.size
+  });
+
+  const allowedTypes = ['application/pdf', 'application/x-pdf', 'application/octet-stream'];
+  
+  const isPDF = allowedTypes.includes(file.mimetype) || 
+                file.originalname.toLowerCase().endsWith('.pdf');
+  
+  if (isPDF) {
+    cb(null, true);
+  } else {
+    console.error('Tipo file non permesso:', file.mimetype);
+    cb(new Error('Solo file PDF sono permessi'), false);
+  }
+};
+
+
+const upload = multer({
+storage,
+fileFilter,
+limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+});
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+//Per caricare immagini sotto la cartella public/
+app.use('/static', express.static('public'));
+
+// Middleware
+app.use(cors({
+  origin: '*', // Permetti tutte le origini
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(bodyParser.json());
+app.use((req, res, next) => {
+  console.log(`Request URL: ${req.url}`);
+  next();
+});
+
+// Per servire i file statici (modelli vuoti)
+app.use('/modelli', express.static(path.join(__dirname, 'public', 'modelli')));
+
+// Per servire i file caricati (organizzati per tipo documento)
+app.use('/uploads/documenti/conformita', express.static(path.join(__dirname, 'uploads', 'documenti', 'conformita')));
+app.use('/uploads/documenti/rispondenza', express.static(path.join(__dirname, 'uploads', 'documenti', 'rispondenza')));
+
+
+
+app.post('/clienti', async (req, res) => {
+  const connection = await pool.getConnection();
+
+  try {
+	const { nome, cognome, citta, via, email, telefono, codice_fiscale } = req.body;
+
+	// Validazione campi obbligatori
+	if (!nome || !cognome || !via) {
+	  return res.status(400).json({ error: 'Nome, cognome e via sono campi obbligatori' });
+	}
+
+	// Inserimento nel database
+	const [result] = await connection.query(
+	  'INSERT INTO Cliente (nome, cognome, citta, via, email, telefono, codice_fiscale) VALUES (?, ?, ?, ?, ?, ?, ?)',
+	  [nome, cognome, citta, via, email, telefono, codice_fiscale]
+	);
+
+	res.status(201).json({
+	  success: true,
+	  id_cliente: result.insertId,
+	  message: 'Cliente creato con successo'
+	});
+  } catch (error) {
+	console.error('Errore creazione cliente:', error);
+
+	// Gestione specifica degli errori
+	if (error.code === 'ER_DUP_ENTRY') {
+	  res.status(409).json({ error: 'Cliente già esistente' });
+	} else {
+	  res.status(500).json({ error: 'Errore durante la creazione del cliente' });
+	}
+  } finally {
+	connection.release(); // Rilascia sempre la connessione
+  }
+});
+
+// DELETE /clienti/:id - Cancella un cliente e tutti i suoi preventivi
+app.delete('/clienti/:id', async (req, res) => {
+  const connection = await pool.getConnection();
+  
+  try {
+    const { id } = req.params;
+
+    // Verifica se il cliente esiste
+    const [cliente] = await connection.query(
+      'SELECT id_cliente FROM Cliente WHERE id_cliente = ?', 
+      [id]
+    );
+
+    if (cliente.length === 0) {
+      return res.status(404).json({ error: 'Cliente non trovato' });
+    }
+
+    await connection.beginTransaction();
+
+    // 1. Cancella tutte le tabelle collegate (in ordine inverso rispetto alle dipendenze)
+    await connection.query('DELETE FROM caldaie WHERE id_cliente = ?', [id]);
+    await connection.query('DELETE FROM Preventivo WHERE id_cliente = ?', [id]);
+    // Aggiungi qui altre tabelle collegate se necessario
+
+    // 2. Finalmente cancella il cliente
+    await connection.query('DELETE FROM Cliente WHERE id_cliente = ?', [id]);
+
+    await connection.commit();
+
+    res.json({ 
+      success: true,
+      message: 'Cliente e dati correlati cancellati con successo'
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('Errore cancellazione cliente:', error);
+    
+    if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+      res.status(409).json({ 
+        error: 'Impossibile cancellare: esistono ancora dati collegati al cliente',
+        details: error.sqlMessage
+      });
+    } else {
+      res.status(500).json({ 
+        error: 'Errore durante la cancellazione del cliente',
+        details: error.message
+      });
+    }
+  } finally {
+    connection.release();
+  }
+});
+
+// PUT /clienti/:id - Aggiorna un cliente esistente
+app.put('/clienti/:id', async (req, res) => {
+  const connection = await pool.getConnection();
+  
+  try {
+    const { id } = req.params;
+    const { nome, cognome, citta, via, email, telefono, codice_fiscale } = req.body;
+
+    // Validazione campi obbligatori
+    if (!nome || !cognome || !via) {
+      return res.status(400).json({ error: 'Nome, cognome e via sono campi obbligatori' });
+    }
+
+    // Verifica se il cliente esiste
+    const [cliente] = await connection.query(
+      'SELECT id_cliente FROM Cliente WHERE id_cliente = ?', 
+      [id]
+    );
+
+    if (cliente.length === 0) {
+      return res.status(404).json({ error: 'Cliente non trovato' });
+    }
+
+    // Aggiornamento nel database
+    const [result] = await connection.query(
+      `UPDATE Cliente 
+       SET nome = ?, cognome = ?, citta = ?, via = ?, email = ?, telefono = ?, codice_fiscale = ?
+       WHERE id_cliente = ?`,
+      [nome, cognome, citta, via, email, telefono, codice_fiscale, id]
+    );
+
+    res.json({ 
+      success: true,
+      message: 'Cliente aggiornato con successo',
+      id_cliente: id
+    });
+
+  } catch (error) {
+    console.error('Errore aggiornamento cliente:', error);
+    
+    // Gestione specifica degli errori
+    if (error.code === 'ER_DUP_ENTRY') {
+      res.status(409).json({ error: 'Dati conflittuali con un altro cliente' });
+    } else {
+      res.status(500).json({ error: 'Errore durante l\'aggiornamento del cliente' });
+    }
+  } finally {
+    connection.release();
+  }
+});
+
+// Route per l'inserimento del preventivo, cliente e lavori
+app.post('/preventivo', async (req, res) => {
+  let { data_preventivo, id_cliente, prezzo_totale, lavori, rate, cliente } = req.body;
+
+  if (!cliente || !lavori || lavori.length === 0 || !data_preventivo) {
+	return res.status(400).json({ error: 'Dati mancanti: verifica di aver inserito cliente, data e lavori.' });
+  }
+
+  const { nome, cognome, citta, via, email, telefono, codice_fiscale } = cliente;
+
+  const connection = await pool.getConnection();
+  try {
+	await connection.beginTransaction();
+
+	// Verifica se il cliente esiste giÃ  tramite email o codice fiscale
+	const [existingClientRows] = await connection.query(
+	  'SELECT id_cliente FROM Cliente WHERE email = ? OR codice_fiscale = ?',
+	  [email, codice_fiscale]
+	);
+
+	if (existingClientRows.length > 0) {
+	  // Cliente esistente, aggiorna i dati
+	  id_cliente = existingClientRows[0].id_cliente;
+	  await connection.query(
+		'UPDATE Cliente SET nome = ?, cognome = ?, citta = ?, via = ?, telefono = ? WHERE id_cliente = ?',
+		[nome, cognome, citta, via, telefono, id_cliente]
+	  );
+	} else {
+	  // Cliente nuovo, inserisci
+	  const [insertClientResult] = await connection.query(
+		'INSERT INTO Cliente (nome, cognome, citta, via, email, telefono, codice_fiscale) VALUES (?, ?, ?, ?, ?, ?, ?)',
+		[nome, cognome, citta, via, email, telefono, codice_fiscale]
+	  );
+	  id_cliente = insertClientResult.insertId;
+	}
+
+	// Inserisci il preventivo con lâ€™acconto (default a 0 se non passato)
+		const [insertPreventivoResult] = await connection.query(
+		'INSERT INTO Preventivo (data_preventivo, id_cliente, prezzo_totale) VALUES (?, ?, ?)',
+		[data_preventivo, id_cliente, prezzo_totale  || 0]
+		);
+		const id_preventivo = insertPreventivoResult.insertId;
+
+	// Inserisci i lavori associati
+	for (const lavoro of lavori) {
+	  const { tipo_lavoro, descrizione_lavoro, prezzo } = lavoro;
+	  await connection.query(
+		'INSERT INTO Lavoro (id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo) VALUES (?, ?, ?, ?)',
+		[id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo]
+	  );
+	}
+		// Inserisci le rate, se presenti
+		if (Array.isArray(rate) && rate.length > 0) {
+		for (const rata of rate) {
+				const { descrizione, percentuale } = rata;
+				if (descrizione && percentuale != null) {
+				await connection.query(
+						'INSERT INTO rate_pagamento (id_preventivo, descrizione, percentuale) VALUES (?, ?, ?)',
+						[id_preventivo, descrizione, percentuale]
+				);
+				}
+		}
+		}
+
+	// Ricalcola il totale se non specificato
+	if (!prezzo_totale) {
+	  await connection.query(
+		'UPDATE Preventivo SET prezzo_totale = (SELECT IFNULL(SUM(prezzo), 0) FROM Lavoro WHERE id_preventivo = ?) WHERE id_preventivo = ?',
+		[id_preventivo, id_preventivo]
+	  );
+	}
+
+	await connection.commit();
+	res.status(201).json({ message: 'Preventivo, cliente e lavori inseriti con successo', id_preventivo });
+  } catch (err) {
+	await connection.rollback();
+	console.error(err);
+	res.status(500).json({ error: 'Errore durante l\'inserimento del preventivo.' });
+  } finally {
+	connection.release();
+  }
+});
+
+
+// Route che recupera TUTTI i dati DEI CLIENTI (NUOVA)
+app.get('/clienti', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+	// 1) Recupera tutti i clienti
+	const [clienti] = await connection.query(`
+	  SELECT id_cliente, nome, cognome, citta, via, email, telefono, codice_fiscale
+	  FROM Cliente
+	`);
+
+	// 2) Recupera tutti i preventivi
+	const [preventivi] = await connection.query(`
+	  SELECT
+		id_preventivo, id_cliente, data_preventivo, prezzo_totale
+	  FROM Preventivo
+	`);
+
+	// 3) Recupera tutti i lavori
+	const [lavori] = await connection.query(`
+	  SELECT id_lavoro, id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo
+	  FROM Lavoro
+	`);
+
+	// 4) Recupera tutte le rate
+	const [rate] = await connection.query(`
+	  SELECT id_preventivo, descrizione, percentuale
+	  FROM rate_pagamento
+	`);
+
+	// 5) Recupera TUTTI i documenti (conformità + rispondenza)
+	const [documentiConformita] = await connection.query(`
+	  SELECT *, 'conformita' AS tipo_documento
+	  FROM dichiarazione_conformita
+	`);
+
+	const [documentiRispondenza] = await connection.query(`
+	  SELECT *, 'rispondenza' AS tipo_documento
+	  FROM dichiarazione_rispondenza
+	`);
+
+	// Combina i documenti
+	const documenti = [...documentiConformita, ...documentiRispondenza];
+
+	// 6) Mappa i dati: clienti con preventivi, lavori, rate e documenti annidati
+	const clientiConPreventivi = clienti.map(cliente => {
+	  const preventiviDelCliente = preventivi.filter(p => p.id_cliente === cliente.id_cliente);
+	  const documentiDelCliente = documenti.filter(d => d.id_cliente === cliente.id_cliente);
+
+	  return {
+		...cliente,
+		preventivi: preventiviDelCliente.map(p => ({
+		  ...p,
+		  lavori: lavori.filter(l => l.id_preventivo === p.id_preventivo),
+		  rate: rate.filter(r => r.id_preventivo === p.id_preventivo),
+		})),
+		documenti: documentiDelCliente
+
+	  };
+	});
+	res.status(200).json(clientiConPreventivi);
+		console.log(JSON.stringify(clientiConPreventivi, null, 2));
+  } catch (error) {
+	console.error(error);
+	res.status(500).json({ error: 'Errore durante il recupero dei clienti con preventivi' });
+  } finally {
+	connection.release();
+  }
+});
+
+app.get('/clienti/:id', async (req, res) => {
+  const idCliente = parseInt(req.params.id, 10);
+
+  if (isNaN(idCliente)) {
+	return res.status(400).json({ error: 'ID cliente non valido.' });
+  }
+
+  const connection = await pool.getConnection();
+  try {
+	// Dati cliente
+	const [clienteRows] = await connection.query(`
+	  SELECT id_cliente, nome, cognome, citta, via, email, telefono, codice_fiscale
+	  FROM Cliente
+	  WHERE id_cliente = ?
+	`, [idCliente]);
+
+	if (clienteRows.length === 0) {
+	  return res.status(404).json({ error: 'Cliente non trovato.' });
+	}
+
+	const cliente = clienteRows[0];
+
+	// Preventivi del cliente
+	const [preventivi] = await connection.query(`
+	  SELECT id_preventivo, data_preventivo, prezzo_totale
+	  FROM Preventivo
+	  WHERE id_cliente = ?
+	`, [idCliente]);
+
+	// Lavori e rate
+	const [lavori] = await connection.query(`
+	  SELECT id_lavoro, id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo
+	  FROM Lavoro
+	  WHERE id_preventivo IN (SELECT id_preventivo FROM Preventivo WHERE id_cliente = ?)
+	`, [idCliente]);
+
+	const [rate] = await connection.query(`
+	  SELECT id_preventivo, descrizione, percentuale
+	  FROM rate_pagamento
+	  WHERE id_preventivo IN (SELECT id_preventivo FROM Preventivo WHERE id_cliente = ?)
+	`, [idCliente]);
+
+	const [documenti] = await connection.query(`
+	  SELECT *
+	  FROM dichiarazione_conformita
+	  WHERE id_cliente = ?
+	`, [idCliente]);
+
+	// Mappa i preventivi
+	const preventiviMappati = preventivi.map(p => ({
+	  ...p,
+	  lavori: lavori.filter(l => l.id_preventivo === p.id_preventivo),
+	  rate: rate.filter(r => r.id_preventivo === p.id_preventivo)
+	}));
+
+	// Risposta finale
+	res.json({
+	  ...cliente,
+	  preventivi: preventiviMappati,
+	  documenti: documenti
+	});
+
+  } catch (error) {
+	console.error(error);
+	res.status(500).json({ error: 'Errore durante il recupero del cliente.' });
+  } finally {
+	connection.release();
+  }
+});
+
+
+
+
+// Route per aggiornare un preventivo e i suoi lavori
+app.put('/preventivi/modifica', async (req, res) => {
+  const {
+	id_preventivo,
+	nome_cliente,
+	cognome_cliente,
+	via,
+	citta,
+	prezzo_totale,
+	data_preventivo,
+	lavori,
+	email,
+	telefono,
+	codice_fiscale,
+	rate // Array di oggetti: [{ descrizione, percentuale }]
+  } = req.body;
+
+  if (
+	!id_preventivo ||
+	!nome_cliente ||
+	!cognome_cliente ||
+	!data_preventivo ||
+	!Array.isArray(lavori)
+  ) {
+	return res.status(400).json({ error: 'Dati mancanti o non validi.' });
+  }
+
+  const connection = await pool.getConnection();
+  try {
+	await connection.beginTransaction();
+
+	// 1. Trova il cliente associato al preventivo
+	const [clienteRows] = await connection.query(
+	  `SELECT Cliente.id_cliente FROM Cliente
+	   INNER JOIN Preventivo ON Cliente.id_cliente = Preventivo.id_cliente
+	   WHERE Preventivo.id_preventivo = ?`,
+	  [id_preventivo]
+	);
+
+	if (clienteRows.length === 0) {
+	  throw new Error('Cliente associato al preventivo non trovato.');
+	}
+
+	const id_cliente = clienteRows[0].id_cliente;
+
+	// 2. Aggiorna dati cliente
+	await connection.query(
+	  `UPDATE Cliente
+	   SET nome = ?, cognome = ?, via = ?, citta = ?, email = ?, telefono = ?, codice_fiscale = ?
+	   WHERE id_cliente = ?`,
+	  [nome_cliente, cognome_cliente, via, citta, email || null, telefono || null, codice_fiscale || null, id_cliente]
+	);
+
+	// 3. Aggiorna dati preventivo
+	await connection.query(
+	  `UPDATE Preventivo
+	   SET data_preventivo = ?, prezzo_totale = ?
+	   WHERE id_preventivo = ?`,
+	  [data_preventivo, prezzo_totale || 0, id_preventivo]
+	);
+
+	// 4. Elimina lavori esistenti
+	await connection.query(`DELETE FROM Lavoro WHERE id_preventivo = ?`, [id_preventivo]);
+
+	// 5. Inserisci nuovi lavori
+	for (const lavoro of lavori) {
+	  const { tipo_lavoro, descrizione_lavoro, prezzo } = lavoro;
+	  await connection.query(
+		`INSERT INTO Lavoro (id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo) VALUES (?, ?, ?, ?)`,
+		[id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo]
+	  );
+	}
+
+	// 6. Elimina rate esistenti
+	await connection.query(`DELETE FROM rate_pagamento WHERE id_preventivo = ?`, [id_preventivo]);
+
+	// 7. Inserisci nuove rate
+	if (Array.isArray(rate)) {
+	  for (const r of rate) {
+		const { descrizione, percentuale } = r;
+		if (descrizione && percentuale != null) {
+		  await connection.query(
+			`INSERT INTO rate_pagamento (id_preventivo, descrizione, percentuale) VALUES (?, ?, ?)`,
+			[id_preventivo, descrizione, percentuale]
+		  );
+		}
+	  }
+	}
+
+	await connection.commit();
+	res.status(200).json({ message: 'Preventivo aggiornato con successo' });
+  } catch (err) {
+	await connection.rollback();
+	console.error(err);
+	res.status(500).json({ error: 'Errore durante la modifica del preventivo.' });
+  } finally {
+	connection.release();
+  }
+});
+
+
+
+// Route per generare il PDF
+app.post("/generate-pdf/preventivo/:id", async (req, res) => {
+  console.log("📦 Request body:", req.body);
+  console.log("📌 Request params:", req.params);
+  const {
+	nome_cliente,
+	cognome_cliente,
+	email,
+	telefono,
+	lavori,
+	citta,
+	via,
+	codice_fiscale,
+	data_preventivo,
+	prezzo_totale,
+	id_preventivo,
+		rate
+  } = req.body;
+
+  if (!Array.isArray(lavori)) {
+	return res.status(400).json({ error: "Campo 'lavori' mancante o non valido" });
+  }
+
+const lavoriHtml = lavori.map(l =>
+  `<tr>
+	<td>
+	  <span style="font-weight: bold; font-size: 14px;">${l.tipo_lavoro}</span><br>
+	  <span style="font-weight: normal; font-size: 12px;">${l.descrizione_lavoro}</span>
+	</td>
+	<td> €${l.prezzo}</td>
+  </tr>`
+).join("");
+
+let rateHtml = "";
+
+if (Array.isArray(rate) && rate.length > 0) {
+  rateHtml = rate.map(r =>
+	`<li><strong>${r.descrizione}:</strong> ${r.percentuale}%</li>`
+  ).join("");
+}
+  const dataObj = new Date(data_preventivo);
+  const dataScadenzaObj = new Date(dataObj);
+  dataScadenzaObj.setDate(dataObj.getDate() + 15);
+  const formatDate = (d) =>
+	`${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+
+  const dataPreventivoFormatted = formatDate(dataObj);
+  const dataScadenzaFormatted = formatDate(dataScadenzaObj);
+
+  // Carica template HTML
+  const templatePath = path.join(__dirname, "templates", "preventivo.html");
+  let html = fs.readFileSync(templatePath, "utf-8");
+
+  // Carica e codifica il logo
+  const imagePath = path.resolve(__dirname, "public", "images", "logo_az_simone.png");
+  let logoBase64 = "";
+
+  try {
+	const imageBuffer = fs.readFileSync(imagePath);
+	logoBase64 = `data:image/png;base64,${imageBuffer.toString("base64")}`;
+  } catch (err) {
+  }
+
+  // Sostituisci i placeholder
+  html = html.replace(/{{logo_path}}/g, logoBase64)
+			 .replace(/{{nome_cliente}}/g, nome_cliente)
+			 .replace(/{{cognome_cliente}}/g, cognome_cliente)
+			 .replace(/{{email}}/g, email)
+			 .replace(/{{telefono}}/g, telefono)
+			 .replace(/{{citta}}/g, citta)
+			 .replace(/{{via}}/g, via)
+			 .replace(/{{codice_fiscale}}/g, codice_fiscale)
+			 .replace(/{{data_preventivo}}/g, dataPreventivoFormatted)
+			 .replace(/{{data_scadenza}}/g, dataScadenzaFormatted)
+			 .replace(/{{prezzo_totale}}/g, prezzo_totale)
+			 .replace(/{{lavori}}/g, lavoriHtml)
+			 .replace(/{{rate}}/g, rateHtml)
+						 .replace(/{{id_preventivo}}/g, id_preventivo);
+
+
+  try {
+	const browser = await puppeteer.launch({
+	  headless: true,
+	  args: ['--no-sandbox', '--disable-setuid-sandbox'],
+	});
+
+	const page = await browser.newPage();
+	await page.setContent(html, { waitUntil: "networkidle0" });
+
+	const pdfBuffer = await page.pdf({ format: "A4" });
+	await browser.close();
+
+	const fileName = `Preventivo.${nome_cliente}.${cognome_cliente}.pdf`.replace(/\s+/g, "_");
+	res.setHeader("Content-Type", "application/pdf");
+	res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+	res.end(pdfBuffer);
+
+  } catch (err) {
+	console.error(" Errore durante la generazione del PDF:", err);
+	res.status(500).send("Errore durante la generazione del PDF");
+  }
+});
+
+
+
+//Route per eliminare un preventivo
+app.delete('/preventivo/:id', async (req, res) => {
+  const id_preventivo = req.params.id;
+  const connection = await pool.getConnection();
+
+  try {
+	console.log('Inizio eliminazione preventivo ID:', id_preventivo);
+	await connection.beginTransaction();
+
+	// Verifica che il preventivo esista (opzionale, ma utile per feedback)
+	const [preventivoRows] = await connection.query(
+	  'SELECT id_cliente FROM Preventivo WHERE id_preventivo = ?',
+	  [id_preventivo]
+	);
+
+	if (preventivoRows.length === 0) {
+	  console.log('Preventivo non trovato');
+	  return res.status(404).json({ error: 'Preventivo non trovato' });
+	}
+
+	// Elimina le rate associate
+	await connection.query('DELETE FROM rate_pagamento WHERE id_preventivo = ?', [id_preventivo]);
+	console.log('Rate eliminate');
+
+	// Elimina i lavori associati
+	await connection.query('DELETE FROM Lavoro WHERE id_preventivo = ?', [id_preventivo]);
+	console.log('Lavori eliminati');
+
+	// Elimina il preventivo
+	await connection.query('DELETE FROM Preventivo WHERE id_preventivo = ?', [id_preventivo]);
+	console.log('Preventivo eliminato');
+
+	await connection.commit();
+	res.status(200).json({ message: 'Preventivo eliminato con successo' });
+  } catch (err) {
+	await connection.rollback();
+	console.error('Errore eliminazione:', err);
+	res.status(500).json({ error: 'Errore durante l\'eliminazione del preventivo' });
+  } finally {
+	connection.release();
+  }
+});
+
+/// ROUTE PER LA FUNZIONALITA DELLA CREAZIONE DEI DOCUMENTI
+//Creazione documento di conformità (POST)
+// Endpoint documenti-conformita aggiornato
+app.post('/documenti-conformita', async (req, res) => {
+  const connection = await pool.getConnection();
+  
+  try {
+    const {
+      id_cliente,
+      esecutrice_impianto,
+      norma_tecnica_applicabile,
+      testo_norma_tecnica_impiego,
+      verificato_compatibilita,
+      progetto_art_5_7,
+      tipologia_materiali_utilizzati,
+      schema_impianto,
+      riferimento_dichiarazioni,
+      copia_certificato_riconoscimento,
+      attestazione_conformita,
+      tipo_documento,
+      data_documento
+    } = req.body;
+
+    const query = `
+      INSERT INTO dichiarazione_conformita (
+        id_cliente, esecutrice_impianto, norma_tecnica_applicabile,
+        testo_norma_tecnica_impiego, verificato_compatibilita, progetto_art_5_7,
+        tipologia_materiali_utilizzati, schema_impianto, riferimento_dichiarazioni,
+        copia_certificato_riconoscimento, attestazione_conformita, tipo_documento, data_documento
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const values = [
+      id_cliente,
+      esecutrice_impianto,
+      norma_tecnica_applicabile || 0,
+      testo_norma_tecnica_impiego,
+      verificato_compatibilita || 0,
+      progetto_art_5_7 || 0,
+      tipologia_materiali_utilizzati || 0,
+      schema_impianto || 0,
+      riferimento_dichiarazioni || 0,
+      copia_certificato_riconoscimento || 0,
+      attestazione_conformita || 0,
+      tipo_documento,
+      data_documento
+    ];
+
+    const [result] = await connection.query(query, values);
+
+    res.status(201).json({
+      success: true,
+      id_documento: result.insertId,
+      message: 'Documento di conformità creato con successo'
+    });
+
+  } catch (err) {
+    console.error("Errore creazione documento conformità:", err);
+    res.status(500).json({
+      success: false,
+      error: "Errore durante la creazione del documento",
+      details: err.message
+    });
+  } finally {
+    connection.release();
+  }
+});
+
+
+//Lettura documenti di conformità per cliente (GET)
+app.get('/documenti', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+	const [conformita] = await connection.query(`
+	  SELECT dc.*, c.nome AS nome_cliente, c.cognome AS cognome_cliente, 'conformita' AS tipo_documento
+	  FROM dichiarazione_conformita dc
+	  JOIN Cliente c ON dc.id_cliente = c.id_cliente
+	`);
+
+	const [rispondenza] = await connection.query(`
+	  SELECT dr.*, c.nome AS nome_cliente, c.cognome AS cognome_cliente, 'rispondenza' AS tipo_documento
+	  FROM dichiarazione_rispondenza dr
+	  JOIN Cliente c ON dr.id_cliente = c.id_cliente
+	`);
+
+	const documenti = [...conformita, ...rispondenza];
+	res.status(200).json(documenti);
+  } catch (error) {
+	console.error("Errore nel recupero dei documenti:", error);
+	res.status(500).send("Errore durante il recupero dei documenti.");
+  } finally {
+	connection.release();
+  }
+});
+
+
+// PUT /documenti/:id MODIFICA DOCUMENTO
+app.put('/documenti-conformita/:id_documento', async (req, res) => {
+  const { id_documento } = req.params;
+  const data = req.body;
+  const connection = await pool.getConnection();
+
+  const query = `
+	UPDATE dichiarazione_conformita SET
+	  esecutrice_impianto = ?,
+	  testo_norma_tecnica_impiego = ?,
+	  norma_tecnica_applicabile = ?,
+	  verificato_compatibilita = ?,
+	  progetto_art_5_7 = ?,
+	  tipologia_materiali_utilizzati = ?,
+	  schema_impianto = ?,
+	  riferimento_dichiarazioni = ?,
+	  copia_certificato_riconoscimento = ?,
+	  attestazione_conformita = ?,
+		  data_documento = ?
+	WHERE id_documento = ?
+  `;
+
+  const values = [
+	data.esecutrice_impianto,
+	data.testo_norma_tecnica_impiego,
+	data.norma_tecnica_applicabile,
+	data.verificato_compatibilita,
+	data.progetto_art_5_7,
+	data.tipologia_materiali_utilizzati,
+	data.schema_impianto,
+	data.riferimento_dichiarazioni,
+	data.copia_certificato_riconoscimento,
+	data.attestazione_conformita,
+		data.data_documento,
+	id_documento,
+  ];
+
+  try {
+	const [result] = await connection.query(query, values);
+
+	if (result.affectedRows === 0) {
+	  return res.status(404).json({ error: "Documento non trovato" });
+	}
+
+	res.json({ message: "Documento aggiornato correttamente" });
+  } catch (err) {
+	console.error("Errore aggiornamento:", err);
+	res.status(500).json({ error: "Errore aggiornamento documento" });
+  } finally {
+	connection.release();
+  }
+});
+
+// DELETE DOCUMENTO (CONFORMITA O RISPONDENZA) CON ALLEGATI
+app.delete('/documenti/:tipo/:id_documento', async (req, res) => {
+  const { tipo, id_documento } = req.params;
+  const connection = await pool.getConnection();
+
+  try {
+    // Verifica e normalizza il tipo documento
+    const tipoNormalizzato = tipo.toLowerCase();
+    let tableName;
+    
+    if (tipoNormalizzato === 'conformita' || tipoNormalizzato === 'conformità') {
+      tableName = 'dichiarazione_conformita';
+    } else if (tipoNormalizzato === 'rispondenza') {
+      tableName = 'dichiarazione_rispondenza';
+    } else {
+      return res.status(400).json({ error: "Tipo documento non valido" });
+    }
+
+    // Inizia una transazione
+    await connection.beginTransaction();
+
+    try {
+      // 1. Prima elimina gli allegati associati
+      const [allegati] = await connection.query(
+        `SELECT id_allegato, file_path 
+         FROM documenti_allegati 
+         WHERE ${tipoNormalizzato === 'conformita' ? 'id_conformita' : 'id_rispondenza'} = ?`,
+        [id_documento]
+      );
+
+      // Elimina i file fisicamente
+      for (const allegato of allegati) {
+        try {
+          if (allegato.file_path && fs.existsSync(allegato.file_path)) {
+            fs.unlinkSync(allegato.file_path);
+          }
+        } catch (err) {
+          console.error(`Errore eliminazione file ${allegato.file_path}:`, err);
+        }
+      }
+
+      // Elimina i record degli allegati
+      await connection.query(
+        `DELETE FROM documenti_allegati 
+         WHERE ${tipoNormalizzato === 'conformita' ? 'id_conformita' : 'id_rispondenza'} = ?`,
+        [id_documento]
+      );
+
+      // 2. Poi elimina il documento padre
+      const [result] = await connection.query(
+        `DELETE FROM ${tableName} WHERE id_documento = ?`,
+        [id_documento]
+      );
+
+      if (result.affectedRows === 0) {
+        await connection.rollback();
+        return res.status(404).json({ error: "Documento non trovato" });
+      }
+
+      // Commit della transazione
+      await connection.commit();
+
+      res.json({ 
+        success: true,
+        message: "Documento e allegati eliminati con successo",
+        deleted: {
+          id_documento: id_documento,
+          tipo_documento: tipoNormalizzato,
+          allegati_eliminati: allegati.length
+        }
+      });
+
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    }
+
+  } catch (err) {
+    console.error("Errore eliminazione documento:", err);
+    res.status(500).json({ 
+      error: "Errore durante l'eliminazione del documento",
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  } finally {
+    connection.release();
+  }
+});
+
+app.get('/documenti/pdf/:id_documento', async (req, res) => {
+  const { id_documento } = req.params;
+  const connection = await pool.getConnection();
+
+  try {
+	// Verifica il tipo di documento
+	const [docInfo] = await connection.query(`
+	  SELECT 'conformita' AS tipo, id_documento
+	  FROM dichiarazione_conformita
+	  WHERE id_documento = ?
+	  UNION
+	  SELECT 'rispondenza' AS tipo, id_documento
+	  FROM dichiarazione_rispondenza
+	  WHERE id_documento = ?
+	`, [id_documento, id_documento]);
+
+	if (docInfo.length === 0) {
+	  return res.status(404).json({ error: "Documento non trovato" });
+	}
+
+	const tipoDocumento = docInfo[0].tipo;
+
+	if (tipoDocumento === 'conformita') {
+	  // Genera PDF per conformità (mantenuto il tuo codice esistente)
+	  const [rows] = await connection.query(
+		'SELECT * FROM dichiarazione_conformita WHERE id_documento = ?',
+		[id_documento]
+	  );
+	  const doc = rows[0];
+
+	  const templatePath = path.join(__dirname, 'pdf-templates', 'Dichiarazione_conformità_popolato_default.pdf');
+	  const existingPdfBytes = fs.readFileSync(templatePath);
+	  const pdfDoc = await PDFDocument.load(existingPdfBytes);
+	  const form = pdfDoc.getForm();
+
+	// Compila i campi testuali
+				form.getTextField('Esecutrice dellimpianto 2 1').setText(doc.esecutrice_impianto || '');
+				form.getTextField('undefined_2').setText(doc.testo_norma_tecnica_impiego || '');
+
+				if (doc.progetto_art_5_7 === true || doc.progetto_art_5_7 === 1) {
+				form.getCheckBox('progetto ai sensi dellart 5 e 75').check();
+				}
+				if (doc.norma_tecnica_applicabile === true || doc.norma_tecnica_applicabile === 1) {
+				form.getCheckBox('seguito la norma tecnica applicabile allimpiego 4').check();
+				}
+				if (doc.verificato_compatibilita === true || doc.verificato_compatibilita === 1) {
+				form.getCheckBox('Verificato la compatibilità tecnica con limpianto preesistente solo per rifacimenti parziali').check();
+				}
+				if (doc.tipologia_materiali_utilizzati === true || doc.tipologia_materiali_utilizzati === 1) {
+				form.getCheckBox('relazione con tipologie dei materiali utilizzati 6').check();
+				}
+				if (doc.schema_impianto === true || doc.schema_impianto === 1) {
+				form.getCheckBox('schema di impianto realizzato 7').check();
+				}
+				if (doc.riferimento_dichiarazioni === true || doc.riferimento_dichiarazioni === 1) {
+				form.getCheckBox('riferimento a dichiarazioni di conformità precedenti o parziali già esistenti8').check();
+				}
+				if (doc.copia_certificato_riconoscimento === true || doc.copia_certificato_riconoscimento === 1) {
+				form.getCheckBox('copia del certificato di riconoscimento dei requisiti tecnicoprofessionali').check();
+				}
+				if (doc.attestazione_conformita === true || doc.attestazione_conformita === 1) {
+				form.getCheckBox('attestazione di conformità per impianto realizzato con materiali o sistemi non normalizzati 9').check();
+				}
+		const formattaData = (d) => {
+		const data = new Date(d);
+		const giorno = String(data.getDate()).padStart(2, '0');
+		const mese = String(data.getMonth() + 1).padStart(2, '0');
+		const anno = data.getFullYear();
+		return `${giorno}/${mese}/${anno}`;
+		};
+
+		const dataFormattata = doc.data_documento ? formattaData(doc.data_documento) : '';
+		form.getTextField('Data').setText(dataFormattata);
+
+
+	  form.flatten();// blocca i campi
+	  const pdfBytes = await pdfDoc.save();
+
+	  res.setHeader('Content-Type', 'application/pdf');
+	  res.setHeader('Content-Disposition', `inline; filename="Conformita_${id_documento}.pdf"`);
+	  res.send(Buffer.from(pdfBytes));
+
+	} else {
+	  // Genera PDF per rispondenza (con tutte le modifiche richieste)
+  const [rows] = await connection.query(`
+	SELECT dr.*, c.nome, c.cognome, c.via, c.citta,
+		   dr.data_documento
+	FROM dichiarazione_rispondenza dr
+	JOIN Cliente c ON dr.id_cliente = c.id_cliente
+	WHERE dr.id_documento = ?
+  `, [id_documento]);
+
+  const doc = rows[0];
+  const templatePath = path.join(__dirname, 'pdf-templates', 'Dichiarazione_di_rispondenza_default.pdf');
+  const existingPdfBytes = fs.readFileSync(templatePath);
+  const pdfDoc = await PDFDocument.load(existingPdfBytes);
+  const form = pdfDoc.getForm();
+
+	  // 1. GESTIONE DATI CLIENTE COMBINATI (Testo26)
+  const datiDelCliente = [
+	doc.nome,
+	doc.cognome,
+	doc.via,
+	doc.citta,
+	doc.installato_prov
+  ].filter(Boolean).join(', ');
+
+	  // 2. GESTIONE DATA FORMATTATA (Testo1 e Testo)
+	 let dataStr = '';
+
+				// Debug: verifica il tipo e valore della data
+				//console.log('Tipo data_documento:', typeof doc.data_documento);
+				//console.log('Valore data_documento:', doc.data_documento);
+
+				if (typeof doc.data_documento === 'string') {
+						dataStr = doc.data_documento;
+				} else if (doc.data_documento instanceof Date) {
+						dataStr = doc.data_documento.toISOString().split('T')[0];
+				} else if (doc.data_documento?.toISOString) {
+						dataStr = doc.data_documento.toISOString().split('T')[0];
+				} else {
+						// Fallback con data corrente
+						dataStr = new Date().toISOString().split('T')[0];
+						console.error('Formato data non riconosciuto, usando data corrente');
+				}
+
+				// Estrai le parti della data
+				const [anno, mese, giorno] = dataStr.split('-');
+				const testoUno = `${mese}/${anno}`;
+				const dataFormattataCompleta = `${giorno}/${mese}/${anno}`;
+	  // 3. GESTIONE TIPO EDIFICIO (Caselle di controllo)
+	  const tipoEdificio = doc.in_edificio_uso || 'civile'; // Default a 'civile' se null
+
+	  // Resetta tutte le caselle
+	  form.getCheckBox('Casella di controllo32').uncheck(); // Industriale
+	  form.getCheckBox('Casella di controllo33').uncheck(); // Civile
+	  form.getCheckBox('Casella di controllo34').uncheck(); // Commercio
+	  form.getCheckBox('Casella di controllo35').uncheck(); // Altri usi
+
+	  // Imposta la casella corretta
+	  switch(tipoEdificio.toLowerCase()) {
+		case 'industriale':
+		  form.getCheckBox('Casella di controllo32').check();
+		  break;
+		case 'civile':
+		  form.getCheckBox('Casella di controllo33').check();
+		  break;
+		case 'commercio':
+		  form.getCheckBox('Casella di controllo34').check();
+		  break;
+		case 'altri usi':
+		  form.getCheckBox('Casella di controllo35').check();
+		  break;
+		default:
+		  console.warn(`Valore edificio non riconosciuto: ${tipoEdificio}`);
+		  form.getCheckBox('Casella di controllo33').check(); // Default a civile
+	  }
+
+	  // COMPILAZIONE DI TUTTI I CAMPI DEL PDF
+	  form.getTextField('Testo1').setText(testoUno); // MM/YYYY
+	  form.getTextField('Testo16').setText(doc.accertamenti_impianto || '');
+	  form.getTextField('Testo17').setText(doc.realizzato_impianto_anno || '');
+	  form.getTextField('Testo18').setText(doc.installato_comune || '');
+	  form.getTextField('Testo19').setText(doc.installato_prov || '');
+	  form.getTextField('Testo20').setText(doc.installato_via || '');
+	  form.getTextField('Testo21').setText(doc.installato_n || '');
+	  form.getTextField('Testo22').setText(doc.installato_scala || '');
+	  form.getTextField('Testo23').setText(doc.installato_piano || '');
+	  form.getTextField('Testo24').setText(doc.installato_interno || '');
+	  form.getTextField('Testo25').setText(datiDelCliente); // Dati combinati cliente
+	  form.getTextField('Testo27').setText(doc.seguito_richiesta || '');
+
+	  // Gestione checkbox relazione verifica
+	  if (doc.relazione_verifica_impianto === 1) {
+		form.getCheckBox('Casella di controllo36').check();
+	  }
+
+	  form.getTextField('Testo28').setText(doc.relazione_altro_testo || '');
+	  form.getTextField('Testo29').setText(dataFormattataCompleta); // GG/MM/AAAA
+
+	  // Finalizza e invia il PDF
+	  form.flatten();
+	  const pdfBytes = await pdfDoc.save();
+
+	  res.setHeader('Content-Type', 'application/pdf');
+	  res.setHeader('Content-Disposition', `inline; filename="Rispondenza_${id_documento}.pdf"`);
+	  res.send(Buffer.from(pdfBytes));
+	}
+  } catch (err) {
+	console.error("Errore generazione PDF:", err);
+	res.status(500).json({ error: "Errore generazione PDF" });
+  } finally {
+	connection.release();
+  }
+});
+
+// Aggiungi questo endpoint per i documenti di rispondenza
+app.post('/documenti-rispondenza', async (req, res) => {
+  const connection = await pool.getConnection(); // Ottieni una connessione promise-based
+
+  try {
+	const {
+	  id_cliente,
+	  in_edificio_uso,
+	  accertamenti_impianto,
+	  realizzato_impianto_anno,
+	  installato_comune,
+	  installato_prov,
+	  installato_via,
+	  installato_n,
+	  installato_scala,
+	  installato_piano,
+	  installato_interno,
+	  seguito_richiesta,
+	  relazione_verifica_impianto,
+	  relazione_altro_testo,
+	  tipo_documento,
+	  data_documento
+	} = req.body;
+
+	const query = `
+	  INSERT INTO dichiarazione_rispondenza (
+		id_cliente, in_edificio_uso, accertamenti_impianto,
+		realizzato_impianto_anno, installato_comune, installato_prov,
+		installato_via, installato_n, installato_scala, installato_piano,
+		installato_interno, seguito_richiesta, relazione_verifica_impianto,
+		relazione_altro_testo, tipo_documento, data_documento
+	  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`;
+
+	const values = [
+	  id_cliente,
+	  in_edificio_uso,
+	  accertamenti_impianto,
+	  realizzato_impianto_anno,
+	  installato_comune,
+	  installato_prov,
+	  installato_via,
+	  installato_n,
+	  installato_scala,
+	  installato_piano,
+	  installato_interno,
+	  seguito_richiesta,
+	  relazione_verifica_impianto || 0,
+	  relazione_altro_testo,
+	  tipo_documento,
+	  data_documento
+	];
+
+	const [result] = await connection.query(query, values);
+
+	res.status(201).json({
+	  success: true,
+	  id_documento: result.insertId,
+	  message: 'Documento di rispondenza creato con successo'
+	});
+
+  } catch (err) {
+	console.error("Errore creazione documento rispondenza:", err);
+	res.status(500).json({
+	  success: false,
+	  error: "Errore durante la creazione del documento",
+	  details: err.message
+	});
+  } finally {
+	connection.release(); // Rilascia sempre la connessione
+  }
+});
+
+// Crea una nuova richiesta cliente (senza token)
+app.post('/richieste-clienti', async (req, res) => {
+  const clienteData = req.body;
+
+  try {
+	const [result] = await pool.query(
+	  `INSERT INTO richieste_clienti
+	  (nome, cognome, citta, via, email, telefono, codice_fiscale, stato)
+	  VALUES (?, ?, ?, ?, ?, ?, ?, 'in_attesa')`,
+	  [
+		clienteData.nome, clienteData.cognome, clienteData.email,
+		clienteData.telefono, clienteData.via, clienteData.citta, clienteData.codice_fiscale
+	  ]
+	);
+
+	res.json({ success: true, id_richiesta: result.insertId });
+  } catch (err) {
+	res.status(500).json({ error: "Errore durante il salvataggio" });
+  }
+});
+
+// Approva richiesta e crea cliente
+app.post('/richieste-clienti/:id/approva', async (req, res) => {
+  const { id } = req.params;
+  const connection = await pool.getConnection();
+
+  try {
+	// 1. Recupera i dati della richiesta
+	const [richiesta] = await connection.query(
+	  `SELECT nome, cognome, email, telefono, citta, via, codice_fiscale
+	   FROM richieste_clienti
+	   WHERE id_richiesta = ? AND stato = 'in_attesa'`,
+	  [id]
+	);
+
+	if (richiesta.length === 0) {
+	  return res.status(404).json({ error: "Richiesta non trovata o già elaborata" });
+	}
+
+	// 2. Inserisci nella tabella Cliente
+	const [result] = await connection.query(
+	  `INSERT INTO Cliente
+	   (nome, cognome, email, telefono, citta, via, codice_fiscale)
+	   VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	  [
+		richiesta[0].nome, richiesta[0].cognome, richiesta[0].email,
+		richiesta[0].telefono, richiesta[0].citta, richiesta[0].via,
+		richiesta[0].codice_fiscale
+	  ]
+	);
+
+	// 3. Aggiorna lo stato e collega l'ID cliente
+	await connection.query(
+	  `UPDATE richieste_clienti
+	   SET stato = 'approvato', id_cliente_approvato = ?
+	   WHERE id_richiesta = ?`,
+	  [result.insertId, id]
+	);
+
+	res.json({
+	  success: true,
+	  id_cliente: result.insertId
+	});
+  } catch (err) {
+	console.error("Errore approvazione:", err);
+	res.status(500).json({ error: "Errore durante l'approvazione" });
+  } finally {
+	connection.release();
+  }
+});
+
+app.get('/statistiche', async (req, res) => {
+  const connection = await pool.getConnection();
+
+  try {
+	// Statistiche esistenti
+	const [clienti] = await connection.query('SELECT COUNT(*) AS totale_clienti FROM Cliente');
+
+	const [preventivi] = await connection.query(`
+	  SELECT YEAR(data_preventivo) AS anno, COUNT(*) AS totale
+	  FROM Preventivo
+	  GROUP BY anno
+	  ORDER BY anno DESC
+	`);
+
+	// Nuove statistiche caldaie
+	const [totaleCaldaie] = await connection.query('SELECT COUNT(*) AS totale FROM caldaie');
+
+	// Ottieni tutte le caldaie con data installazione e tipo
+	const [caldaie] = await connection.query('SELECT tipo_caldaia, data_installazione FROM caldaie');
+
+	// Calcola le scadenze
+	let scadute = 0;
+	let in_scadenza_30gg = 0;
+	let in_scadenza_90gg = 0;
+	let non_scadute = 0;
+
+	const oggi = new Date();
+	const oggi30 = new Date();
+	oggi30.setDate(oggi.getDate() + 30);
+	const oggi90 = new Date();
+	oggi90.setDate(oggi.getDate() + 90);
+
+	caldaie.forEach(caldaia => {
+	  // Calcola la data di scadenza in base al tipo di caldaia
+	  let anniScadenza = 2; // Default
+	  switch(caldaia.tipo_caldaia) {
+		case 'metano_lt_100kw_lt_8anni':
+		  anniScadenza = 4;
+		  break;
+		case 'liquido_solido_gt_100kw':
+		  anniScadenza = 1;
+		  break;
+		// Gli altri casi rimangono 2 anni
+	  }
+
+	  const dataInstallazione = new Date(caldaia.data_installazione);
+	  const dataScadenza = new Date(dataInstallazione);
+	  dataScadenza.setFullYear(dataInstallazione.getFullYear() + anniScadenza);
+
+	  // Classifica la scadenza
+	  if (dataScadenza < oggi) {
+		scadute++;
+	  } else if (dataScadenza <= oggi30) {
+		in_scadenza_30gg++;
+	  } else if (dataScadenza <= oggi90) {
+		in_scadenza_90gg++;
+	  } else {
+		non_scadute++;
+	  }
+	});
+
+	res.json({
+	  totaleClienti: clienti[0].totale_clienti,
+	  preventiviPerAnno: preventivi,
+	  totaleCaldaie: totaleCaldaie[0].totale,
+	  caldaieScadenza: {
+		scadute,
+		in_scadenza_30gg,
+		in_scadenza_90gg,
+		non_scadute
+	  }
+	});
+  } catch (error) {
+	console.error(error);
+	res.status(500).json({ error: 'Errore nel recupero delle statistiche' });
+  } finally {
+	connection.release();
+  }
+});
+
+// Nuova route per ottenere i tipi di lavoro unici, utile per le modifiche e creazioni dei preventivi
+app.get('/tipi-lavoro', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+	const [results] = await connection.query(
+	  'SELECT DISTINCT tipo_lavoro FROM Lavoro ORDER BY tipo_lavoro ASC'
+	);
+	const tipiLavoro = results.map(row => row.tipo_lavoro);
+	res.json(tipiLavoro);
+  } catch (error) {
+	console.error(error);
+	res.status(500).json({ error: 'Errore nel recupero dei tipi di lavoro' });
+  } finally {
+	connection.release();
+  }
+});
+
+// Route per ottenere le descrizioni di lavoro uniche
+app.get('/descrizioni-lavoro', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+	const [results] = await connection.query(
+	  'SELECT DISTINCT descrizione_lavoro FROM Lavoro WHERE descrizione_lavoro IS NOT NULL AND descrizione_lavoro != "" ORDER BY descrizione_lavoro ASC'
+	);
+	const descrizioni = results.map(row => row.descrizione_lavoro);
+	res.json(descrizioni);
+  } catch (error) {
+	console.error(error);
+	res.status(500).json({ error: 'Errore nel recupero delle descrizioni di lavoro' });
+  } finally {
+	connection.release();
+  }
+});
+
+// Route per ottenere tutti i clienti con le loro caldaie
+app.get('/api/clienti-caldaie', async (req, res) => {
+	let connection;
+	try {
+		connection = await pool.getConnection();
+
+		const query = `
+			SELECT
+				c.id_cliente,
+				c.nome,
+				c.cognome,
+				c.citta,
+				c.via,
+				c.email,
+				c.telefono,
+				c.codice_fiscale,
+				cl.id_caldaia,
+				cl.tipo_caldaia,
+				cl.potenza,
+				cl.data_installazione,
+				CASE
+					WHEN cl.tipo_caldaia = 'metano_lt_100kw_lt_8anni' THEN DATE_ADD(cl.data_installazione, INTERVAL 4 YEAR)
+					WHEN cl.tipo_caldaia = 'metano_lt_100kw' THEN DATE_ADD(cl.data_installazione, INTERVAL 2 YEAR)
+					WHEN cl.tipo_caldaia = 'liquido_solido_lt_100kw' THEN DATE_ADD(cl.data_installazione, INTERVAL 2 YEAR)
+					WHEN cl.tipo_caldaia = 'liquido_solido_gt_100kw' THEN DATE_ADD(cl.data_installazione, INTERVAL 1 YEAR)
+				END as data_scadenza
+			FROM Cliente c
+			INNER JOIN caldaie cl ON c.id_cliente = cl.id_cliente
+			ORDER BY c.cognome, c.nome
+		`;
+		const [results] = await connection.query(query);
+		res.json(results);
+	} catch (error) {
+		console.error('Errore nel recupero dei clienti con caldaie:', error);
+		res.status(500).json({ error: 'Errore del server' });
+	} finally {
+		if (connection) connection.release();
+	}
+});
+
+// Route per aggiungere una nuova caldaia
+app.post('/api/caldaie', async (req, res) => {
+	let connection;
+	try {
+		const { id_cliente, tipo_caldaia, potenza, data_installazione } = req.body;
+
+		if (!id_cliente || !tipo_caldaia || !potenza || !data_installazione) {
+			return res.status(400).json({ error: 'Tutti i campi sono obbligatori' });
+		}
+
+		connection = await pool.promise().getConnection(); // Ottieni una connessione
+
+		const query = `
+			INSERT INTO caldaie (id_cliente, tipo_caldaia, potenza, data_installazione)
+			VALUES (?, ?, ?, ?)
+		`;
+		const [result] = await connection.query(query, [id_cliente, tipo_caldaia, potenza, data_installazione]);
+
+		// Recupera la caldaia appena inserita con la data di scadenza calcolata
+		const [caldaia] = await connection.query(`
+			SELECT *,
+				   CASE
+					 WHEN tipo_caldaia = 'metano_lt_100kw_lt_8anni' THEN DATE_ADD(data_installazione, INTERVAL 4 YEAR)
+					 WHEN tipo_caldaia = 'metano_lt_100kw' THEN DATE_ADD(data_installazione, INTERVAL 2 YEAR)
+					 WHEN tipo_caldaia = 'liquido_solido_lt_100kw' THEN DATE_ADD(data_installazione, INTERVAL 2 YEAR)
+					 WHEN tipo_caldaia = 'liquido_solido_gt_100kw' THEN DATE_ADD(data_installazione, INTERVAL 1 YEAR)
+				   END as data_scadenza
+			FROM caldaie
+			WHERE id_caldaia = ?
+		`, [result.insertId]);
+
+		res.status(201).json(caldaia[0]);
+	} catch (error) {
+		console.error('Errore nell\'inserimento della caldaia:', error);
+		res.status(500).json({ error: 'Errore del server' });
+	} finally {
+		if (connection) connection.release(); // Rilascia sempre la connessione
+	}
+});
+
+// Route per ottenere tutti i clienti
+app.get('/api/clienti', async (req, res) => {
+	let connection;
+	try {
+		connection = await pool.getConnection();
+
+		const query = 'SELECT id_cliente, nome, cognome FROM Cliente ORDER BY cognome, nome';
+		const [results] = await connection.query(query);
+		res.json(results);
+	} catch (error) {
+		console.error('Errore nel recupero dei clienti:', error);
+		res.status(500).json({ error: 'Errore del server' });
+	} finally {
+		if (connection) connection.release(); // Rilascia sempre la connessione
+	}
+});
+app.delete('/api/caldaie/:id', async (req, res) => {
+  const { id } = req.params;
+  const connection = await pool.getConnection();
+
+  try {
+	// 1. Verifica che la caldaia esista
+	const [rows] = await connection.query(
+	  'SELECT * FROM caldaie WHERE id_caldaia = ?',
+	  [id]
+	);
+
+	if (rows.length === 0) {
+	  return res.status(404).json({ error: 'Caldaia non trovata' });
+	}
+
+	// 2. Elimina la caldaia
+	const [result] = await connection.query(
+	  'DELETE FROM caldaie WHERE id_caldaia = ?',
+	  [id]
+	);
+
+	res.status(200).json({ message: 'Caldaia eliminata con successo' });
+  } catch (err) {
+	console.error('Errore eliminazione caldaia:', err);
+	res.status(500).json({ error: 'Errore del server' });
+  } finally {
+	connection.release();
+  }
+});
+
+app.post('/caldaie/invia-avviso', async (req, res) => {
+  const { recipientEmail, boilerId, clientName } = req.body;
+
+  try {
+	// 1. Verifica parametri obbligatori
+	if (!recipientEmail || !boilerId || !clientName) {
+	  throw new Error('Parametri mancanti');
+	}
+
+	// 2. Carica template
+	const emailTemplate = fs.readFileSync(
+	  '/preventivi_backend/templates/reminder_caldaia.html',
+	  'utf8'
+	);
+
+	// 3. Compila template
+	const compiledHtml = emailTemplate
+	  .replace(/\${clientName}/g, clientName)
+	  .replace(/\${boilerId}/g, boilerId);
+
+	// 4. Configura email
+	const mailOptions = {
+	  from: '"IMC Impianti" <impiantiimc@gmail.com>',
+	  to: recipientEmail,
+	  subject: `🔔 Avviso revisione caldaia ${boilerId}`,
+	  html: compiledHtml,
+	  text: `Gentile ${clientName},\n\nLa revisione per la sua caldaia (ID: ${boilerId}) è in programma.\n\nCordiali saluti,\nIMC Impianti`,
+	  attachments: [{
+		filename: 'logo-imc.png',
+		path: '/preventivi_backend/public/images/logo_az_simone.png',
+		cid: 'company-logo'
+	  }]
+	};
+
+	// 5. Invia email
+	const info = await mailTransporter.sendMail(mailOptions);
+
+	console.log(`Email inviata a ${recipientEmail}`, info.messageId);
+	res.json({
+	  success: true,
+	  messageId: info.messageId
+	});
+
+  } catch (error) {
+	console.error('Errore invio email:', error);
+	res.status(500).json({
+	  success: false,
+	  error: error.message || 'Errore durante l\'invio dell\'email'
+	});
+  }
+});
+
+// Endpoint per download modelli vuoti
+app.get('/modello-vuoto/:tipo', (req, res) => {
+  const tipo = req.params.tipo;
+  const fileName = MODELLI[tipo];
+  
+  if (!fileName) {
+	return res.status(404).json({ error: 'Modello non trovato' });
+  }
+
+  const filePath = path.join(__dirname, 'public', 'modelli', fileName);
+  
+  if (!fs.existsSync(filePath)) {
+	return res.status(404).json({ error: 'File non trovato' });
+  }
+  console.log('Contenuto della directory modelli:', fs.readdirSync(path.join(__dirname, 'public', 'modelli')));
+
+  res.download(filePath, fileName, (err) => {
+	if (err) {
+	  console.error('Download error:', err);
+	  res.status(500).json({ error: 'Errore durante il download' });
+	}
+  });
+  });
+
+// Endpoint per upload documenti compilati
+// Endpoint per upload documenti compilati
+app.post('/:tipo_documento/:id_documento/upload', upload.single('documento'), async (req, res) => {
+  console.log('Richiesta upload ricevuta:', {
+    params: req.params,
+    body: req.body,
+    file: req.file
+  });
+  
+  let connection;
+  try {
+    if (!req.file) {
+      console.log('Nessun file ricevuto nella richiesta');
+      return res.status(400).json({ error: 'Nessun file caricato' });
+    }
+
+    console.log('File ricevuto:', {
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      path: req.file.path
+    });
+
+    const { id_documento, tipo_documento } = req.params;
+    const { tipo_allegato } = req.body;
+
+    // Verifiche di validità
+    if (!['conformita', 'rispondenza'].includes(tipo_documento)) {
+      return res.status(400).json({ error: 'Tipo documento non valido' });
+    }
+
+    const tipiAllegatiValidi = ['modulo_a12', 'relazione_materiali', 'relazione_verifica'];
+    if (!tipiAllegatiValidi.includes(tipo_allegato)) {
+      return res.status(400).json({ error: 'Tipo allegato non valido' });
+    }
+
+    connection = await pool.getConnection();
+
+    // Verifica esistenza documento padre
+    const tableName = tipo_documento === 'conformita' 
+      ? 'dichiarazione_conformita' 
+      : 'dichiarazione_rispondenza';
+    
+    const [documento] = await connection.query(
+      `SELECT 1 FROM ${tableName} WHERE id_documento = ?`,
+      [id_documento]
+    );
+
+    if (documento.length === 0) {
+      return res.status(404).json({ error: 'Documento non trovato' });
+    }
+
+    // Prepara i dati per l'inserimento
+    const insertData = {
+      tipo_allegato,
+      file_path: req.file.path,
+      dimensione_file: req.file.size
+    };
+
+    // Imposta l'ID corretto in base al tipo di documento
+    if (tipo_documento === 'conformita') {
+      insertData.id_conformita = id_documento;
+      insertData.id_rispondenza = null;
+    } else {
+      insertData.id_rispondenza = id_documento;
+      insertData.id_conformita = null;
+    }
+
+    // Inserisci l'allegato con i campi necessari
+    const [result] = await connection.query(
+      `INSERT INTO documenti_allegati SET ?`,
+      [insertData]
+    );
+
+    res.json({ 
+      success: true,
+      message: 'Documento caricato con successo',
+      tipo_allegato,
+      id_documento,
+      id_allegato: result.insertId,
+      fileInfo: {
+        path: req.file.path,
+        name: req.file.filename,
+        size: req.file.size,
+        type: req.file.mimetype
+      }
+    });
+
+  } catch (error) {
+    console.error('Upload error:', {
+      message: error.message,
+      stack: error.stack,
+      fullError: error
+    });
+    res.status(500).json({ 
+      error: 'Errore durante il caricamento del documento',
+      details: error.message 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Endpoint per download documenti compilati
+app.get('/:tipo_documento/:id_documento/download/:tipo_allegato', async (req, res) => {
+  let connection;
+  try {
+    const { id_documento, tipo_documento, tipo_allegato } = req.params;
+
+    // Verifiche di validità
+    if (!['conformita', 'rispondenza'].includes(tipo_documento)) {
+      return res.status(400).json({ error: 'Tipo documento non valido' });
+    }
+
+    connection = await pool.getConnection();
+
+    // Recupera direttamente dalla tabella documenti_allegati
+  const [allegato] = await connection.query(`
+    SELECT file_path 
+    FROM documenti_allegati
+    WHERE ${tipo_documento === 'conformita' ? 'id_conformita' : 'id_rispondenza'} = ? 
+      AND tipo_allegato = ?
+  `, [id_documento, tipo_allegato]);
+
+    if (allegato.length === 0) {
+      return res.status(404).json({ error: 'Allegato non trovato' });
+    }
+
+    const filePath = allegato[0].file_path;
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'File non trovato sul server' });
+    }
+
+    const fileName = `${tipo_allegato}_${id_documento}${path.extname(filePath)}`;
+    
+    res.download(filePath, fileName, (err) => {
+      if (err) {
+        console.error('Download error:', err);
+        res.status(500).json({ error: 'Errore durante il download' });
+      }
+    });
+
+  } catch (error) {
+    console.error('Download error:', error);
+    res.status(500).json({ error: 'Errore durante il recupero del documento' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Endpoint per verificare presenza allegati
+app.get('/:tipo_documento/:id_documento/allegati', async (req, res) => {
+  try {
+    const { id_documento, tipo_documento } = req.params;
+
+    // Recupera tutti gli allegati per il documento
+  const [allegati] = await pool.query(
+    `SELECT tipo_allegato, data_caricamento, dimensione_file 
+     FROM documenti_allegati
+     WHERE ${tipo_documento === 'conformita' ? 'id_conformita' : 'id_rispondenza'} = ?`,
+    [id_documento]
+  );
+
+    // Formatta la risposta
+    const result = {
+      has_modulo_a12: false,
+      has_relazione_materiali: false,
+      has_relazione_verifica: false,
+      allegati_details: {}
+    };
+
+    allegati.forEach(allegato => {
+      result[`has_${allegato.tipo_allegato}`] = true;
+      result.allegati_details[allegato.tipo_allegato] = {
+        data_caricamento: allegato.data_caricamento,
+        dimensione_file: allegato.dimensione_file
+      };
+    });
+
+    res.json(result);
+
+  } catch (error) {
+    console.error('Error checking attachments:', error);
+    res.status(500).json({ error: 'Errore durante il recupero degli allegati' });
+  }
+});
+
+// Endpoint per eliminare un singolo allegato
+app.delete('/:tipo_documento/:id_documento/delete-allegato/:tipo_allegato', async (req, res) => {
+  let connection;
+  try {
+    const { id_documento, tipo_documento, tipo_allegato } = req.params;
+
+    // Verifiche di validità
+    if (!['conformita', 'rispondenza'].includes(tipo_documento)) {
+      return res.status(400).json({ error: 'Tipo documento non valido' });
+    }
+
+    const tipiAllegatiValidi = ['modulo_a12', 'relazione_materiali', 'relazione_verifica'];
+    if (!tipiAllegatiValidi.includes(tipo_allegato)) {
+      return res.status(400).json({ error: 'Tipo allegato non valido' });
+    }
+
+    connection = await pool.getConnection();
+
+    // 1. Trova l'allegato specifico da eliminare
+    const [allegato] = await connection.query(
+      `SELECT id_allegato, file_path 
+       FROM documenti_allegati 
+       WHERE ${tipo_documento === 'conformita' ? 'id_conformita' : 'id_rispondenza'} = ? 
+       AND tipo_allegato = ?`,
+      [id_documento, tipo_allegato]
+    );
+
+    if (allegato.length === 0) {
+      return res.status(404).json({ error: 'Allegato non trovato' });
+    }
+
+    const filePath = allegato[0].file_path;
+    const id_allegato = allegato[0].id_allegato;
+
+    // 2. Elimina il file fisicamente (se esiste)
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.log(`File eliminato: ${filePath}`);
+      }
+    } catch (err) {
+      console.error('Errore eliminazione file:', err);
+      // Procedi comunque con l'eliminazione dal DB
+    }
+
+    // 3. Elimina il record dal database
+    await connection.query(
+      `DELETE FROM documenti_allegati WHERE id_allegato = ?`,
+      [id_allegato]
+    );
+
+    res.json({ 
+      success: true,
+      message: 'Allegato eliminato con successo',
+      deleted: {
+        id_allegato: id_allegato,
+        tipo_allegato: tipo_allegato,
+        file_path: filePath
+      }
+    });
+
+  } catch (error) {
+    console.error('Errore eliminazione allegato:', error);
+    res.status(500).json({ 
+      error: 'Errore durante l\'eliminazione dell\'allegato',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+	
+	
+// Avvia il server
+app.listen(port, () => {
+  console.log(`Server in ascolto sulla porta ${port}`);
+});
+
+

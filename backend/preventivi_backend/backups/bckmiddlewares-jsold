@@ -1,0 +1,96 @@
+const path = require('path');
+const express = require('express');
+const admin = require('firebase-admin');
+
+// Inizializzazione Firebase Admin
+if (!admin.apps.length) {
+  try {
+    // Verifica che tutte le variabili necessarie siano presenti
+    const requiredEnvVars = ['FIREBASE_PROJECT_ID', 'FIREBASE_CLIENT_EMAIL', 'FIREBASE_PRIVATE_KEY'];
+    const missingVars = requiredEnvVars.filter(v => !process.env[v]);
+    
+    if (missingVars.length > 0) {
+      throw new Error(`Variabili d'ambiente mancanti: ${missingVars.join(', ')}`);
+    }
+
+    const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
+    
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+        privateKey: privateKey
+      })
+    });
+    console.log('Firebase Admin inizializzato');
+  } catch (error) {
+    console.error('Errore inizializzazione Firebase:', error.message);
+    process.exit(1);
+  }
+}
+
+// Middleware di autenticazione
+const authenticateFirebase = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Token non fornito' });
+  }
+
+  const idToken = authHeader.split(' ')[1];
+
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    req.user = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      role: decodedToken.role || 'user'
+    };
+    next();
+  } catch (error) {
+    console.error('Errore verifica token:', error.message);
+    res.status(403).json({
+      error: 'Accesso non autorizzato',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Middleware di autorizzazione
+const authorizeRoles = (...allowedRoles) => (req, res, next) => {
+  if (!req.user?.role || !allowedRoles.includes(req.user.role)) {
+    return res.status(403).json({
+      error: 'Accesso negato',
+      requiredRoles: allowedRoles,
+      currentRole: req.user?.role
+    });
+  }
+  next();
+};
+
+// Verifica accesso al documento
+const verifyDocumentAccess = async (userId, documentId) => {
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.query(
+      `SELECT 1 FROM documenti_accessi
+       WHERE user_id = ? AND document_id = ?`,
+      [userId, documentId]
+    );
+    return rows.length > 0;
+  } finally {
+    connection.release();
+  }
+};
+
+module.exports = {
+  authenticateFirebase,
+  authorizeRoles,
+  verifyDocumentAccess,
+  staticFiles: (app) => {
+    app.use('/static', express.static(path.join(__dirname, '../public')));
+    app.use('/modelli', express.static(path.join(__dirname, '../public/modelli')));
+    app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+  }
+};
+
