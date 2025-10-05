@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -50,7 +51,10 @@ class AuthService {
 
   Future<void> signOut() async {
     await _auth.signOut();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('rememberMe', false);
     await _googleSignIn.signOut();
+
   }
 
   Future<void> handleUnauthorized() async {

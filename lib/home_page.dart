@@ -15,6 +15,7 @@ import 'main_home_page.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'services/api_client.dart';
 import 'services/auth_service.dart';
+import 'package:preventivi_app/services/auth_service.dart';
 
 class HomePage extends StatefulWidget {
   @override
@@ -30,7 +31,7 @@ class _HomePageState extends State<HomePage> {
   String? filtroGiorno;
   bool isLoading = true;
   User? currentUser;
-  
+  final AuthService _authService = AuthService();
 
   @override
   void initState() {
@@ -936,14 +937,51 @@ Future<void> _navigateToEditCliente(Map<String, dynamic> clienteData) async {
         },
       ),
               Divider(),
-              ListTile(
-                leading: Icon(Icons.logout),
-                title: Text('Logout'),
-                onTap: () async {
-                  await FirebaseAuth.instance.signOut();
-                  Navigator.pushReplacementNamed(context, '/login');
-                },
-              ),
+      ListTile(
+        leading: Icon(Icons.logout),
+        title: Text('Logout'),
+        onTap: () async {
+          try {
+            // Mostra un dialog di conferma
+            bool? confirm = await showDialog(
+              context: context,
+              builder: (BuildContext context) {
+                return AlertDialog(
+                  title: Text('Conferma Logout'),
+                  content: Text('Sei sicuro di voler uscire?'),
+                  actions: [
+                    TextButton(
+                      child: Text('Annulla'),
+                      onPressed: () => Navigator.of(context).pop(false),
+                    ),
+                    TextButton(
+                      child: Text('Esci'),
+                      onPressed: () => Navigator.of(context).pop(true),
+                    ),
+                  ],
+                );
+              },
+            );
+
+            if (confirm == true) {
+              await _authService.signOut();
+              if (mounted) {
+                Navigator.pushNamedAndRemoveUntil(
+                  context, 
+                  '/', 
+                  (route) => false
+                );
+              }
+            }
+          } catch (e) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Errore durante il logout: ${e.toString()}')),
+              );
+            }
+          }
+        },
+      ),
             ],
           ),
         );

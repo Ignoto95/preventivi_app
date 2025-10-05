@@ -39,6 +39,7 @@ dependencies:
   mailer: ^6.0.0       # Per l'invio email
   flutter_dotenv: ^5.1.0 # Per nascondere le credenziali (opzionale ma consigliato)
   file_picker: ^5.2.5
+  shared_preferences: ^2.2.2
 
 dev_dependencies:
   flutter_test:

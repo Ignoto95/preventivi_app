@@ -163,9 +163,36 @@ Widget _buildDrawer(BuildContext context) {
           title: Text('Logout'),
           onTap: () async {
             try {
-              await _authService.signOut();
-              if (mounted) {
-                Navigator.pushReplacementNamed(context, '/login');
+              // Mostra un dialog di conferma
+              bool? confirm = await showDialog(
+                context: context,
+                builder: (BuildContext context) {
+                  return AlertDialog(
+                    title: Text('Conferma Logout'),
+                    content: Text('Sei sicuro di voler uscire?'),
+                    actions: [
+                      TextButton(
+                        child: Text('Annulla'),
+                        onPressed: () => Navigator.of(context).pop(false),
+                      ),
+                      TextButton(
+                        child: Text('Esci'),
+                        onPressed: () => Navigator.of(context).pop(true),
+                      ),
+                    ],
+                  );
+                },
+              );
+        
+              if (confirm == true) {
+                await _authService.signOut();
+                if (mounted) {
+                  Navigator.pushNamedAndRemoveUntil(
+                    context, 
+                    '/', 
+                    (route) => false
+                  );
+                }
               }
             } catch (e) {
               if (mounted) {
