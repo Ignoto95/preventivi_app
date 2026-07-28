@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'services/api_client.dart';
 
 class ListaRichiestePage extends StatefulWidget {
   @override
@@ -20,9 +20,7 @@ class _ListaRichiestePageState extends State<ListaRichiestePage> {
   Future<void> _loadRichieste() async {
     setState(() => _isLoading = true);
     try {
-      final response = await http.get(
-        Uri.parse('http://94.176.182.61:3000/richieste-clienti?stato=in_attesa'),
-      );
+      final response = await ApiClient().get('richieste-clienti?stato=in_attesa');
       if (response.statusCode == 200) {
         setState(() {
           _richieste = json.decode(response.body);
@@ -85,10 +83,8 @@ class _ListaRichiestePageState extends State<ListaRichiestePage> {
 
   Future<void> _approvaRichiesta(int idRichiesta) async {
     try {
-      final response = await http.post(
-        Uri.parse('http://94.176.182.61:3000/richieste-clienti/$idRichiesta/approva'),
-      );
-      
+      final response = await ApiClient().post('richieste-clienti/$idRichiesta/approva');
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         ScaffoldMessenger.of(context).showSnackBar(

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'services/api_client.dart';
 
 class FormRichiestaCliente extends StatefulWidget {
   @override
@@ -24,9 +24,8 @@ class _FormRichiestaClienteState extends State<FormRichiestaCliente> {
     _formKey.currentState!.save();
 
     try {
-      final response = await http.post(
-        Uri.parse('http://94.176.182.61:3000/richieste-clienti'),
-        headers: {'Content-Type': 'application/json'},
+      final response = await ApiClient().post(
+        'richieste-clienti',
         body: json.encode(_formData),
       );
 
