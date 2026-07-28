@@ -100,7 +100,20 @@ class _ListaRichiestePageState extends State<ListaRichiestePage> {
   }
 
   Future<void> _rifiutaRichiesta(int idRichiesta) async {
-    // Implementa il rifiuto simile all'approvazione
+    try {
+      final response = await ApiClient().post('richieste-clienti/$idRichiesta/rifiuta');
+
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Richiesta rifiutata')),
+        );
+        await _loadRichieste();
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Errore: $e')),
+      );
+    }
   }
 
   void _showDettaglioRichiesta(Map<String, dynamic> richiesta) {
