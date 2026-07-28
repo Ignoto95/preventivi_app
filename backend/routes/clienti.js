@@ -1,0 +1,441 @@
+const express = require('express');
+const router = express.Router();
+const pool = require('../config/db');
+//const auth = require('../middlewares/auth');
+const {
+  authenticateFirebase,
+  authorizeRoles,
+  verifyDocumentAccess
+} = require('../middlewares');
+
+const ROLES = {
+  ADMIN: 'admin',
+  TECHNICIAN: 'technician',
+  USER: 'user'
+};
+
+// Middleware firebase specifico per le route
+router.use(authenticateFirebase);
+
+// POST nuovo cliente
+router.post('/clienti', authorizeRoles(ROLES.ADMIN), async (req, res) => {
+  const connection = await pool.getConnection();
+
+  try {
+            console.log('Aggiunta cliente richiesta da admin ${req.user.email}');
+        const { nome, cognome, citta, via, email, telefono, codice_fiscale } = req.body;
+
+        // Validazione campi obbligatori
+        if (!nome || !cognome || !via) {
+          return res.status(400).json({ error: 'Nome, cognome e via sono campi obbligatori' });
+        }
+
+        // Inserimento nel database
+        const [result] = await connection.query(
+          'INSERT INTO Cliente (nome, cognome, citta, via, email, telefono, codice_fiscale) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [nome, cognome, citta, via, email, telefono, codice_fiscale]
+        );
+
+        res.status(201).json({
+          success: true,
+          id_cliente: result.insertId,
+          message: 'Cliente creato con successo'
+        });
+  } catch (error) {
+        console.error('Errore creazione cliente:', error);
+
+        // Gestione specifica degli errori
+        if (error.code === 'ER_DUP_ENTRY') {
+          res.status(409).json({ error: 'Cliente già esistente' });
+        } else {
+          res.status(500).json({ error: 'Errore durante la creazione del cliente' });
+        }
+  } finally {
+        connection.release(); // Rilascia sempre la connessione
+  }
+});
+
+// DELETE Cancella un cliente e tutti i suoi preventivi
+router.delete('/clienti/:id',authorizeRoles(ROLES.ADMIN), async (req, res) => {
+  const connection = await pool.getConnection();
+  console.log('Eliminazione Cliente richiesta da admin ${req.user.email}');
+  try {
+    const { id } = req.params;
+
+    // Verifica se il cliente esiste
+    const [cliente] = await connection.query(
+      'SELECT id_cliente FROM Cliente WHERE id_cliente = ?',
+      [id]
+    );
+
+    if (cliente.length === 0) {
+      return res.status(404).json({ error: 'Cliente non trovato' });
+    }
+
+    await connection.beginTransaction();
+
+    // 1. Cancella tutte le tabelle collegate (in ordine inverso rispetto alle dipendenze)
+    await connection.query('DELETE FROM condizionatori WHERE id_cliente = ?', [id]);
+    await connection.query('DELETE FROM Preventivo WHERE id_cliente = ?', [id]);
+    // Aggiungi qui altre tabelle collegate se necessario
+
+    // 2. Finalmente cancella il cliente
+    await connection.query('DELETE FROM Cliente WHERE id_cliente = ?', [id]);
+
+    await connection.commit();
+
+    res.json({
+      success: true,
+      message: 'Cliente e dati correlati cancellati con successo'
+    });
+
+  } catch (error) {
+    await connection.rollback();
+    console.error('Errore cancellazione cliente:', error);
+
+    if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+      res.status(409).json({
+        error: 'Impossibile cancellare: esistono ancora dati collegati al cliente',
+        details: error.sqlMessage
+      });
+    } else {
+      res.status(500).json({
+        error: 'Errore durante la cancellazione del cliente',
+        details: error.message
+      });
+    }
+  } finally {
+    connection.release();
+  }
+});
+
+// PUT /clienti/:id - Aggiorna un cliente esistente
+router.put('/clienti/:id',authorizeRoles(ROLES.ADMIN), async (req, res) => {
+  const connection = await pool.getConnection();
+
+  try {
+        console.log('Eliminazione richiesta da admin ${req.user.email}');
+    const { id } = req.params;
+    const { nome, cognome, citta, via, email, telefono, codice_fiscale } = req.body;
+
+    // Validazione campi obbligatori
+    if (!nome || !cognome || !via) {
+      return res.status(400).json({ error: 'Nome, cognome e via sono campi obbligatori' });
+    }
+
+    // Verifica se il cliente esiste
+    const [cliente] = await connection.query(
+      'SELECT id_cliente FROM Cliente WHERE id_cliente = ?',
+      [id]
+    );
+
+    if (cliente.length === 0) {
+      return res.status(404).json({ error: 'Cliente non trovato' });
+    }
+
+    // Aggiornamento nel database
+    const [result] = await connection.query(
+      `UPDATE Cliente
+       SET nome = ?, cognome = ?, citta = ?, via = ?, email = ?, telefono = ?, codice_fiscale = ?
+       WHERE id_cliente = ?`,
+      [nome, cognome, citta, via, email, telefono, codice_fiscale, id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Cliente aggiornato con successo',
+      id_cliente: id
+    });
+
+  } catch (error) {
+    console.error('Errore aggiornamento cliente:', error);
+
+    // Gestione specifica degli errori
+    if (error.code === 'ER_DUP_ENTRY') {
+      res.status(409).json({ error: 'Dati conflittuali con un altro cliente' });
+    } else {
+      res.status(500).json({ error: 'Errore durante l\'aggiornamento del cliente' });
+    }
+  } finally {
+    connection.release();
+  }
+});
+
+router.get('/clienti/:id', authorizeRoles(ROLES.ADMIN), async (req, res) => {
+  const idCliente = parseInt(req.params.id, 10);
+  console.log('info cliente richiesto da ${req.user.email}');
+
+  if (isNaN(idCliente)) {
+        return res.status(400).json({ error: 'ID cliente non valido.' });
+  }
+
+  const connection = await pool.getConnection();
+  try {
+        // Dati cliente
+        const [clienteRows] = await connection.query(`
+          SELECT id_cliente, nome, cognome, citta, via, email, telefono, codice_fiscale
+          FROM Cliente
+          WHERE id_cliente = ?
+        `, [idCliente]);
+
+        if (clienteRows.length === 0) {
+          return res.status(404).json({ error: 'Cliente non trovato.' });
+        }
+
+        const cliente = clienteRows[0];
+
+        // Preventivi del cliente
+        const [preventivi] = await connection.query(`
+          SELECT id_preventivo, data_preventivo, prezzo_totale
+          FROM Preventivo
+          WHERE id_cliente = ?
+        `, [idCliente]);
+
+        // Lavori e rate
+        const [lavori] = await connection.query(`
+          SELECT id_lavoro, id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo
+          FROM Lavoro
+          WHERE id_preventivo IN (SELECT id_preventivo FROM Preventivo WHERE id_cliente = ?)
+        `, [idCliente]);
+
+        const [rate] = await connection.query(`
+          SELECT id_preventivo, descrizione, percentuale
+          FROM rate_pagamento
+          WHERE id_preventivo IN (SELECT id_preventivo FROM Preventivo WHERE id_cliente = ?)
+        `, [idCliente]);
+
+        const [documenti] = await connection.query(`
+          SELECT *
+          FROM dichiarazione_conformita
+          WHERE id_cliente = ?
+        `, [idCliente]);
+
+        // Mappa i preventivi
+        const preventiviMappati = preventivi.map(p => ({
+          ...p,
+          lavori: lavori.filter(l => l.id_preventivo === p.id_preventivo),
+          rate: rate.filter(r => r.id_preventivo === p.id_preventivo)
+        }));
+
+        // Risposta finale
+        res.json({
+          ...cliente,
+          preventivi: preventiviMappati,
+          documenti: documenti
+        });
+
+  } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Errore durante il recupero del cliente.' });
+  } finally {
+        connection.release();
+  }
+});
+
+// Route che recupera TUTTI i dati DEI CLIENTI (NUOVA)
+router.get('/clienti',authorizeRoles(ROLES.ADMIN), async (req, res) => {
+  console.log('info di tutti i clienti richiesto da ${req.user.email}');
+  const connection = await pool.getConnection();
+  try {
+        // 1)Recupera tutti i clienti
+        const [clienti] = await connection.query(`
+          SELECT id_cliente, nome, cognome, citta, via, email, telefono, codice_fiscale
+          FROM Cliente
+        `);
+
+        // 2)Recupera tutti i preventivi
+        const [preventivi] = await connection.query(`
+          SELECT
+                id_preventivo, id_cliente, data_preventivo, prezzo_totale
+          FROM Preventivo
+        `);
+
+        // 3)Recupera tutti i lavori
+        const [lavori] = await connection.query(`
+          SELECT id_lavoro, id_preventivo, tipo_lavoro, descrizione_lavoro, prezzo
+          FROM Lavoro
+        `);
+
+        // 4)Recupera tutte le rate
+        const [rate] = await connection.query(`
+          SELECT id_preventivo, descrizione, percentuale
+          FROM rate_pagamento
+        `);
+
+        // 5)Recupera TUTTI i documenti (conformità + rispondenza)
+        const [documentiConformita] = await connection.query(`
+          SELECT *, 'conformita' AS tipo_documento
+          FROM dichiarazione_conformita
+        `);
+
+        const [documentiRispondenza] = await connection.query(`
+          SELECT *, 'rispondenza' AS tipo_documento
+          FROM dichiarazione_rispondenza
+        `);
+
+        // Combina i documenti
+        const documenti = [...documentiConformita, ...documentiRispondenza];
+
+        // 6) Mappa i dati: clienti con preventivi, lavori, rate e documenti annidati
+        const clientiConPreventivi = clienti.map(cliente => {
+          const preventiviDelCliente = preventivi.filter(p => p.id_cliente === cliente.id_cliente);
+          const documentiDelCliente = documenti.filter(d => d.id_cliente === cliente.id_cliente);
+
+          return {
+                ...cliente,
+                preventivi: preventiviDelCliente.map(p => ({
+                  ...p,
+                  lavori: lavori.filter(l => l.id_preventivo === p.id_preventivo),
+                  rate: rate.filter(r => r.id_preventivo === p.id_preventivo),
+                })),
+                documenti: documentiDelCliente
+
+          };
+        });
+        res.status(200).json(clientiConPreventivi);
+               // console.log(JSON.stringify(clientiConPreventivi, null, 2));
+  } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Errore durante il recupero dei clienti con preventivi' });
+  } finally {
+        connection.release();
+  }
+});
+
+// POST Crea una nuova richiesta cliente (senza token)
+router.post('/richieste-clienti',authorizeRoles(ROLES.ADMIN), async (req, res) => {
+  console.log('info di tutti i clienti richiesto da ${req.user.email}');
+  const clienteData = req.body;
+
+  try {
+        const [result] = await pool.query(
+          `INSERT INTO richieste_clienti
+          (nome, cognome, citta, via, email, telefono, codice_fiscale, stato)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'in_attesa')`,
+          [
+                clienteData.nome, clienteData.cognome, clienteData.email,
+                clienteData.telefono, clienteData.via, clienteData.citta, clienteData.codice_fiscale
+          ]
+        );
+
+        res.json({ success: true, id_richiesta: result.insertId });
+  } catch (err) {
+        res.status(500).json({ error: "Errore durante il salvataggio" });
+  }
+});
+
+// GET Lista richieste clienti (filtrabile per stato)
+router.get('/richieste-clienti', authorizeRoles(ROLES.ADMIN), async (req, res) => {
+  const { stato } = req.query;
+
+  try {
+        const [richieste] = stato
+          ? await pool.query(
+              `SELECT * FROM richieste_clienti WHERE stato = ? ORDER BY data_richiesta DESC`,
+              [stato]
+            )
+          : await pool.query(
+              `SELECT * FROM richieste_clienti ORDER BY data_richiesta DESC`
+            );
+
+        res.json(richieste);
+  } catch (err) {
+        console.error('Errore recupero richieste clienti:', err);
+        res.status(500).json({ error: "Errore durante il recupero delle richieste" });
+  }
+});
+
+// POST Approva richiesta e crea cliente
+router.post('/richieste-clienti/:id/approva',authorizeRoles(ROLES.ADMIN), async (req, res) => {
+  const { id } = req.params;
+  const connection = await pool.getConnection();
+
+  try {
+          console.log('Approva aggiunta cliente richiesta da admin ${req.user.email}');
+        // 1. Recupera i dati della richiesta
+        const [richiesta] = await connection.query(
+          `SELECT nome, cognome, email, telefono, citta, via, codice_fiscale
+           FROM richieste_clienti
+           WHERE id_richiesta = ? AND stato = 'in_attesa'`,
+          [id]
+        );
+
+        if (richiesta.length === 0) {
+          return res.status(404).json({ error: "Richiesta non trovata o già elaborata" });
+        }
+
+        // 2. Inserisci nella tabella Cliente
+        const [result] = await connection.query(
+          `INSERT INTO Cliente
+           (nome, cognome, email, telefono, citta, via, codice_fiscale)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+                richiesta[0].nome, richiesta[0].cognome, richiesta[0].email,
+                richiesta[0].telefono, richiesta[0].citta, richiesta[0].via,
+                richiesta[0].codice_fiscale
+          ]
+        );
+
+        // 3. Aggiorna lo stato e collega l'ID cliente
+        await connection.query(
+          `UPDATE richieste_clienti
+           SET stato = 'approvato', id_cliente_approvato = ?
+           WHERE id_richiesta = ?`,
+          [result.insertId, id]
+        );
+
+        res.json({
+          success: true,
+          id_cliente: result.insertId
+        });
+  } catch (err) {
+        console.error("Errore approvazione:", err);
+        res.status(500).json({ error: "Errore durante l'approvazione" });
+  } finally {
+        connection.release();
+  }
+});
+
+// POST Rifiuta richiesta cliente
+router.post('/richieste-clienti/:id/rifiuta', authorizeRoles(ROLES.ADMIN), async (req, res) => {
+  const { id } = req.params;
+
+  try {
+        const [result] = await pool.query(
+          `UPDATE richieste_clienti
+           SET stato = 'rifiutato'
+           WHERE id_richiesta = ? AND stato = 'in_attesa'`,
+          [id]
+        );
+
+        if (result.affectedRows === 0) {
+          return res.status(404).json({ error: "Richiesta non trovata o già elaborata" });
+        }
+
+        res.json({ success: true });
+  } catch (err) {
+        console.error("Errore rifiuto richiesta:", err);
+        res.status(500).json({ error: "Errore durante il rifiuto della richiesta" });
+  }
+});
+
+// GET Route per ottenere tutti i clienti (nuova)
+router.get('/api/clienti',authorizeRoles(ROLES.ADMIN), async (req, res) => {
+        let connection;
+        try {
+                        console.log('info tutti clienti richiesta da ${req.user.email}');
+                connection = await pool.getConnection();
+
+                const query = 'SELECT id_cliente, nome, cognome FROM Cliente ORDER BY cognome, nome';
+                const [results] = await connection.query(query);
+                res.json(results);
+        } catch (error) {
+                console.error('Errore nel recupero dei clienti:', error);
+                res.status(500).json({ error: 'Errore del server' });
+        } finally {
+                if (connection) connection.release(); // Rilascia sempre la connessione
+        }
+});
+
+module.exports = router;
+
